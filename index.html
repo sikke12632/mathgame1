@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>도형 영토전</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section id="setupScreen" class="setup-screen">
+        <div class="setup-copy">
+          <p class="kicker">5학년 1학기: 둘레와 넓이</p>
+          <h1>도형 영토전</h1>
+        </div>
+
+        <form id="setupForm" class="setup-form">
+          <fieldset class="setting-group">
+            <legend>학습 범위</legend>
+            <div class="segmented">
+              <label><input type="radio" name="scope" value="perimeter" /> <span>둘레만</span></label>
+              <label><input type="radio" name="scope" value="area" /> <span>넓이만</span></label>
+              <label><input type="radio" name="scope" value="both" checked /> <span>둘레 + 넓이</span></label>
+            </div>
+          </fieldset>
+
+          <fieldset class="setting-group">
+            <legend>등장 도형</legend>
+            <div id="shapeChoices" class="shape-grid"></div>
+          </fieldset>
+
+          <fieldset class="setting-group">
+            <legend>난이도</legend>
+            <div class="segmented">
+              <label><input type="radio" name="difficulty" value="easy" /> <span>쉬움</span></label>
+              <label><input type="radio" name="difficulty" value="normal" checked /> <span>보통</span></label>
+              <label><input type="radio" name="difficulty" value="hard" /> <span>어려움</span></label>
+            </div>
+          </fieldset>
+
+          <label class="switch-row">
+            <span>
+              <strong>자동칠하기 버튼 사용</strong>
+              <small>정답 뒤 연결된 빈칸을 자동으로 골라줍니다.</small>
+            </span>
+            <input id="autoFillInput" type="checkbox" checked />
+          </label>
+
+          <p id="setupError" class="form-error" aria-live="polite"></p>
+          <div class="mode-actions">
+            <button type="submit" class="primary-action">이 기기에서 시작</button>
+            <button id="createOnlineBtn" type="button" class="primary-action online-action">온라인 방 만들기</button>
+          </div>
+
+          <section class="online-join-box" aria-label="온라인 방 입장">
+            <label for="roomCodeInput">방 코드로 입장</label>
+            <div class="answer-row">
+              <input id="roomCodeInput" autocomplete="off" maxlength="6" placeholder="예: A7K2Q9" />
+              <button id="joinOnlineBtn" type="button" class="ghost-button">입장</button>
+            </div>
+            <p id="onlineSetupStatus" class="online-status" aria-live="polite"></p>
+          </section>
+        </form>
+      </section>
+
+      <section id="gameScreen" class="game-screen" hidden>
+        <header class="game-header">
+          <div>
+            <p class="kicker">5학년 1학기: 둘레와 넓이</p>
+            <h1>도형 영토전</h1>
+            <p id="onlineGameStatus" class="online-game-status" hidden></p>
+          </div>
+          <div class="header-actions">
+            <button id="newGameBtn" class="ghost-button" type="button">새 게임</button>
+            <button id="backSetupBtn" class="ghost-button" type="button">설정</button>
+          </div>
+        </header>
+
+        <div class="game-layout">
+          <section class="board-panel" aria-label="게임판">
+            <div class="board-meta">
+              <div>
+                <span id="currentPlayerBadge" class="player-badge player1">A 차례</span>
+                <span id="turnText" class="turn-text">A 1/5, B 1/5</span>
+              </div>
+              <span id="phaseText" class="phase-text">문제 풀기</span>
+            </div>
+            <div id="board" class="board" role="grid" tabindex="0" aria-label="20 곱하기 20 도형 영토전 게임판"></div>
+            <p id="boardHint" class="board-hint">정답을 맞히면 연결된 칸을 드래그하거나 직접 눌러 색칠할 수 있습니다.</p>
+          </section>
+
+          <aside class="side-panel">
+            <section class="score-panel" aria-label="점수판">
+              <div class="score-line player1-line">
+                <strong>A</strong>
+                <span>현재 칸 <b id="p1Cells">4</b></span>
+                <span>점수 <b id="p1Final">4</b></span>
+              </div>
+              <div class="score-line player2-line">
+                <strong>B</strong>
+                <span>현재 칸 <b id="p2Cells">4</b></span>
+                <span>점수 <b id="p2Final">4</b></span>
+              </div>
+            </section>
+
+            <section id="skipNotice" class="notice-panel" hidden></section>
+
+            <section id="problemPanel" class="problem-panel">
+              <div class="problem-topline">
+                <span id="problemType" class="problem-type">이번 문제: 넓이 구하기</span>
+                <span id="timerText" class="timer-text">45초</span>
+              </div>
+              <h2 id="shapeName">도형</h2>
+              <div id="diagramBox" class="diagram-box" aria-hidden="true"></div>
+              <p id="problemPrompt" class="problem-prompt"></p>
+              <p id="formulaText" class="formula-text"></p>
+              <form id="answerForm" class="answer-form">
+                <label for="answerInput">정답</label>
+                <div class="answer-row">
+                  <input id="answerInput" inputmode="numeric" autocomplete="off" />
+                  <button type="submit" class="primary-action compact">제출</button>
+                </div>
+              </form>
+            </section>
+
+            <section id="paintPanel" class="paint-panel" hidden>
+              <h2>색칠 단계</h2>
+              <dl class="paint-stats">
+                <div><dt>획득 칸</dt><dd id="earnedCells">0</dd></div>
+                <div><dt>선택한 칸</dt><dd id="usedCells">0 / 0</dd></div>
+                <div><dt>내 색으로 칠할 칸</dt><dd id="paintedCells">0</dd></div>
+                <div><dt>상대 칸 중립화</dt><dd id="neutralizedCells">0 / 0</dd></div>
+                <div><dt>남은 에너지</dt><dd id="remainingEnergy">0</dd></div>
+              </dl>
+              <div class="paint-actions">
+                <button id="undoSelectionBtn" class="ghost-button" type="button">되돌리기</button>
+                <button id="autoFillBtn" class="ghost-button" type="button">자동칠하기</button>
+                <button id="confirmPaintBtn" class="primary-action compact" type="button">색칠 확정</button>
+                <button id="skipPaintBtn" class="ghost-button" type="button">턴 넘기기</button>
+              </div>
+            </section>
+
+            <section id="feedbackPanel" class="feedback-panel" hidden>
+              <h2 id="feedbackTitle">안내</h2>
+              <p id="feedbackMessage"></p>
+              <button id="continueBtn" class="primary-action compact" type="button">다음 턴</button>
+            </section>
+          </aside>
+        </div>
+      </section>
+
+      <section id="resultScreen" class="result-screen" hidden>
+        <p class="kicker">게임 종료</p>
+        <h1 id="winnerTitle">결과</h1>
+        <div class="result-grid">
+          <div class="result-box player1-line">
+            <h2>플레이어 A</h2>
+            <p>현재 칸 <strong id="resultP1Cells">0</strong></p>
+            <p>최종 점수 <strong id="resultP1Final">0</strong></p>
+          </div>
+          <div class="result-box player2-line">
+            <h2>플레이어 B</h2>
+            <p>현재 칸 <strong id="resultP2Cells">0</strong></p>
+            <p>최종 점수 <strong id="resultP2Final">0</strong></p>
+          </div>
+        </div>
+        <div class="result-actions">
+          <button id="resultRestartBtn" class="primary-action" type="button">다시 하기</button>
+          <button id="resultSetupBtn" class="ghost-button" type="button">설정으로 돌아가기</button>
+        </div>
+      </section>
+    </main>
+
+    <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
+    <script src="./firebase-config.js"></script>
+    <script src="./gameCore.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>
