@@ -107,8 +107,13 @@ p {
   font-size: 1.05rem;
 }
 
+.how-to-panel h3 {
+  margin: 12px 0 8px;
+  font-size: 0.95rem;
+}
+
 .how-to-panel ol {
-  margin: 0;
+  margin: 0 0 4px;
   padding-left: 22px;
   display: grid;
   gap: 7px;

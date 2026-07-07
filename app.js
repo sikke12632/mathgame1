@@ -11,6 +11,7 @@
     howToPlayBtn: $("howToPlayBtn"),
     howToPlayPanel: $("howToPlayPanel"),
     shapeChoices: $("shapeChoices"),
+    autoFillRow: $("autoFillRow"),
     autoFillInput: $("autoFillInput"),
     createOnlineBtn: $("createOnlineBtn"),
     roomCodeInput: $("roomCodeInput"),
@@ -123,6 +124,7 @@
   let rpgChoiceSecrets = {};
   let lastRpgStatPlayer = "";
   let lastRenderedRpgProblemKey = "";
+  let soloAiTimer = null;
 
   const ANIMAL_NAMES = [
     "다람쥐",
@@ -164,6 +166,7 @@
     buildBoardCells();
     initFirebase();
     bindEvents();
+    updateAutoFillAvailability();
     render();
   }
 
@@ -250,6 +253,10 @@
       els.howToPlayBtn.textContent = nextOpen ? "플레이 방법 닫기" : "플레이 방법";
     });
 
+    document.querySelectorAll("input[name='gameMode']").forEach((input) => {
+      input.addEventListener("change", updateAutoFillAvailability);
+    });
+
     els.setupForm.addEventListener("submit", (event) => {
       event.preventDefault();
       const settings = collectSettings();
@@ -261,6 +268,8 @@
         selectedGameMode === "rpg"
           ? core.createRpgState(settings, "local-" + Date.now())
           : core.createGameState(settings);
+      state.solo = true;
+      state.aiPlayer = "player2";
       lastRenderedProblemId = null;
       selectionHistory = [];
       rpgChoiceSecrets = {};
@@ -345,6 +354,10 @@
         return;
       }
       const nextState = core.createGameState(state ? state.settings : lastSettings);
+      if (isSoloGame()) {
+        nextState.solo = true;
+        nextState.aiPlayer = "player2";
+      }
       lastRenderedProblemId = null;
       selectionHistory = [];
       commitState(nextState, { status: isOnline() ? "playing" : undefined });
@@ -362,6 +375,10 @@
         return;
       }
       const nextState = core.createGameState(lastSettings);
+      if (state && state.solo) {
+        nextState.solo = true;
+        nextState.aiPlayer = "player2";
+      }
       lastRenderedProblemId = null;
       selectionHistory = [];
       commitState(nextState, { status: isOnline() ? "playing" : undefined });
@@ -449,7 +466,7 @@
       scope: formData.get("scope"),
       shapes,
       difficulty: formData.get("difficulty"),
-      autoFill: els.autoFillInput.checked,
+      autoFill: collectGameMode() === "rpg" ? false : els.autoFillInput.checked,
     });
   }
 
@@ -460,6 +477,16 @@
 
   function isRpgState() {
     return state && state.gameMode === "rpg";
+  }
+
+  function updateAutoFillAvailability() {
+    const isRpg = collectGameMode() === "rpg";
+    if (els.autoFillRow) {
+      els.autoFillRow.hidden = isRpg;
+    }
+    if (els.autoFillInput) {
+      els.autoFillInput.disabled = isRpg;
+    }
   }
 
   function normalizeRoomCode(value) {
@@ -489,6 +516,14 @@
     return online.active && online.roomRef;
   }
 
+  function isSoloGame() {
+    return Boolean(state && state.solo && !isOnline());
+  }
+
+  function isAiPlayer(player) {
+    return isSoloGame() && player === (state.aiPlayer || "player2");
+  }
+
   function hasSubmitted(player) {
     return Boolean(state && state.submissions && state.submissions[player]);
   }
@@ -497,6 +532,9 @@
     if (!state || state.phase !== "question") return null;
     if (isOnline()) {
       return hasSubmitted(online.role) ? null : online.role;
+    }
+    if (isSoloGame()) {
+      return hasSubmitted("player1") ? null : "player1";
     }
     return core.PLAYER_KEYS.find((player) => !hasSubmitted(player)) || null;
   }
@@ -508,6 +546,7 @@
   function activeRpgPlayer() {
     if (!isRpgState()) return null;
     if (isOnline()) return online.role;
+    if (isSoloGame()) return "player1";
     if (state.phase === "rpgSolving") {
       return core.PLAYER_KEYS.find((player) => !state.solveFinished[player]) || "player1";
     }
@@ -524,13 +563,35 @@
 
   function canActRpg() {
     if (!isRpgState()) return false;
-    if (!isOnline()) return true;
+    if (!isOnline()) {
+      if (!isSoloGame()) return true;
+      if (state.phase === "rpgSolving") return !state.solveFinished.player1;
+      if (state.phase === "rpgStatAllocation") return !state.statLocked.player1;
+      if (state.phase === "rpgBattle" && state.battle) {
+        const turnKey = String(state.battle.turnIndex);
+        const choices = (state.battle.choices && state.battle.choices[turnKey]) || {};
+        return !choices.player1;
+      }
+      return false;
+    }
     return Boolean(online.room && online.room.players && online.room.players.player2);
   }
 
   function canAct() {
     if (!state) return false;
-    if (!isOnline()) return true;
+    if (!isOnline()) {
+      if (!isSoloGame()) return true;
+      if (state.phase === "question") return !hasSubmitted("player1");
+      if (state.phase === "round-result") {
+        const queue = state.actionQueue || [];
+        if (!queue.length) return true;
+        return queue[0] === "player1";
+      }
+      if (state.phase === "painting" || state.phase === "feedback") {
+        return state.currentPlayer === "player1";
+      }
+      return true;
+    }
     const hasOpponent = Boolean(online.room && online.room.players && online.room.players.player2);
     if (!hasOpponent && state.phase !== "gameover") return false;
     if (state.phase === "question") {
@@ -834,6 +895,7 @@
     renderSkipNotice();
     renderOnlineGameStatus();
     startTimerIfNeeded();
+    scheduleSoloAiIfNeeded();
   }
 
   function renderRpg() {
@@ -844,12 +906,13 @@
 
     renderRpgOnlineStatus();
     renderRpgPanels();
+    scheduleSoloAiIfNeeded();
   }
 
   function renderRpgOnlineStatus() {
     if (!els.rpgOnlineStatus) return;
     if (!isOnline()) {
-      els.rpgOnlineStatus.textContent = "로컬 RPG 대전";
+      els.rpgOnlineStatus.textContent = isSoloGame() ? "혼자서 하기 | 상대 AI" : "로컬 도형 RPG 대전";
       return;
     }
     const players = (online.room && online.room.players) || {};
@@ -1110,6 +1173,159 @@
         hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
       });
     return String(hash);
+  }
+
+  function scheduleSoloAiIfNeeded() {
+    if (!isSoloGame() || soloAiTimer) return;
+    if (isRpgState()) {
+      scheduleSoloRpgAiIfNeeded();
+      return;
+    }
+    scheduleSoloTerritoryAiIfNeeded();
+  }
+
+  function scheduleSoloTerritoryAiIfNeeded() {
+    if (!state) return;
+    if (state.phase === "question" && hasSubmitted("player1") && !hasSubmitted("player2")) {
+      scheduleSoloAiAction(() => {
+        const problem = state.problem;
+        const answer = aiAnswerForProblem(problem);
+        const p1Submission = state.submissions && state.submissions.player1;
+        const baseTime = Number.isFinite(p1Submission && p1Submission.submittedAt)
+          ? p1Submission.submittedAt
+          : Date.now();
+        const submittedAt = baseTime + randomInt(-4000, 7000);
+        commitState(core.submitAnswer(state, "player2", answer, submittedAt));
+      }, 650);
+      return;
+    }
+
+    if (state.phase === "round-result" && (state.actionQueue || [])[0] === "player2") {
+      scheduleSoloAiAction(() => {
+        commitState(core.nextTurn(state));
+      }, 900);
+      return;
+    }
+
+    if (state.phase === "painting" && state.currentPlayer === "player2") {
+      scheduleSoloAiAction(() => {
+        let nextState = state;
+        const selection = core.autoFillSelection(nextState);
+        if (selection.length) {
+          nextState = core.selectCells(nextState, selection);
+        }
+        commitState(core.confirmPainting(nextState));
+      }, 900);
+      return;
+    }
+
+    if (state.phase === "feedback" && state.currentPlayer === "player2") {
+      scheduleSoloAiAction(() => {
+        commitState(core.nextTurn(state));
+      }, 800);
+    }
+  }
+
+  function scheduleSoloRpgAiIfNeeded() {
+    if (!state) return;
+    if (state.phase === "rpgSolving") {
+      const humanCount = core.rpgPlayerAnswerIndex(state, "player1");
+      const aiCount = core.rpgPlayerAnswerIndex(state, "player2");
+      if (humanCount > aiCount && aiCount < core.RPG_PROBLEM_COUNT) {
+        scheduleSoloAiAction(() => {
+          const problem = state.problems[core.rpgPlayerAnswerIndex(state, "player2")];
+          commitState(core.submitRpgAnswer(state, "player2", aiAnswerForProblem(problem)));
+        }, 650);
+      }
+      return;
+    }
+
+    if (state.phase === "rpgStatAllocation" && state.statLocked.player1 && !state.statLocked.player2) {
+      scheduleSoloAiAction(() => {
+        const input = createAiRpgStatInput(state.solveScores.player2 || 0);
+        commitState(core.lockRpgStats(state, "player2", input));
+      }, 900);
+      return;
+    }
+
+    if (state.phase === "rpgBattle" && state.battle) {
+      const turnKey = String(state.battle.turnIndex);
+      const choices = (state.battle.choices && state.battle.choices[turnKey]) || {};
+      if (choices.player1 && !choices.player2) {
+        scheduleSoloAiAction(async () => {
+          const choice = chooseAiRpgChoice();
+          const salt = createRpgSalt();
+          const commitHash = await sha256Text(`${choice}:${salt}`);
+          rpgChoiceSecrets[`${turnKey}:player2`] = { choice, salt, commitHash };
+          commitState(core.commitRpgChoice(state, "player2", commitHash));
+        }, 650);
+      }
+    }
+  }
+
+  function scheduleSoloAiAction(action, delay) {
+    soloAiTimer = window.setTimeout(async () => {
+      soloAiTimer = null;
+      if (!isSoloGame()) return;
+      await action();
+    }, delay);
+  }
+
+  function aiAnswerForProblem(problem) {
+    if (!problem) return "";
+    const correct = Math.random() < 0.7;
+    if (correct) return problem.answer;
+    return problem.answer + randomInt(1, 5);
+  }
+
+  function createAiRpgStatInput(totalPoints) {
+    const points = Math.max(0, Math.floor(Number(totalPoints) || 0));
+    if (points === 0) {
+      return {
+        totalPoints: 0,
+        hpInvest: 0,
+        attackInvest: 0,
+        defenseInvest: 0,
+        zeroPointArchetype: "attack",
+      };
+    }
+
+    let hpInvest = Math.floor(points * 0.25);
+    let remaining = points - hpInvest;
+    let attackInvest = Math.ceil(remaining * 0.65);
+    let defenseInvest = remaining - attackInvest;
+
+    if (attackInvest === defenseInvest) {
+      if (defenseInvest > 0) {
+        attackInvest += 1;
+        defenseInvest -= 1;
+      } else if (hpInvest > 0) {
+        hpInvest -= 1;
+        attackInvest += 1;
+      } else {
+        attackInvest = points;
+        defenseInvest = 0;
+      }
+    }
+
+    return {
+      totalPoints: points,
+      hpInvest,
+      attackInvest,
+      defenseInvest,
+      zeroPointArchetype: "attack",
+    };
+  }
+
+  function chooseAiRpgChoice() {
+    const roll = Math.random();
+    if (roll < 0.42) return "scissors";
+    if (roll < 0.72) return "rock";
+    return "paper";
+  }
+
+  function randomInt(min, max) {
+    return min + Math.floor(Math.random() * (max - min + 1));
   }
 
   function renderScore() {

@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>도형 영토전</title>
+    <title>도형 게임</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -11,18 +11,26 @@
       <section id="setupScreen" class="setup-screen">
         <div class="setup-copy">
           <p class="kicker">5학년 1학기: 둘레와 넓이</p>
-          <h1>도형 영토전</h1>
+          <h1>도형 게임</h1>
           <button id="howToPlayBtn" class="ghost-button how-to-button" type="button" aria-expanded="false">
             플레이 방법
           </button>
           <section id="howToPlayPanel" class="how-to-panel" hidden>
             <h2>이렇게 해요</h2>
+            <h3>도형 영토전</h3>
             <ol>
               <li>A와 B가 같은 문제를 풉니다.</li>
               <li>둘 다 정답이면 빨리 낸 사람이 먼저 칠합니다.</li>
               <li>한 명만 정답이면 정답자만 칠합니다.</li>
               <li>내 색과 붙은 칸만 칠할 수 있습니다.</li>
               <li>마지막에 내 색 칸이 많으면 이깁니다.</li>
+            </ol>
+            <h3>도형 RPG 대전</h3>
+            <ol>
+              <li>같은 문제 5개를 풉니다.</li>
+              <li>정답 점수로 체력, 공격력, 방어력을 올립니다.</li>
+              <li>가위, 바위, 보를 골라 5턴 전투를 합니다.</li>
+              <li>마지막에 체력이 더 많으면 이깁니다.</li>
             </ol>
             <p>A는 파랑, B는 빨강, X는 못 쓰는 칸입니다.</p>
           </section>
@@ -42,7 +50,7 @@
               <label class="mode-card-option">
                 <input type="radio" name="gameMode" value="rpg" />
                 <span>
-                  <strong>수학 RPG 대전</strong>
+                  <strong>도형 RPG 대전</strong>
                   <small>5문제를 풀어 스탯을 올린 뒤 가위바위보 전투를 합니다.</small>
                 </span>
               </label>
@@ -72,7 +80,7 @@
             </div>
           </fieldset>
 
-          <label class="switch-row">
+          <label id="autoFillRow" class="switch-row">
             <span>
               <strong>자동칠하기 버튼 사용</strong>
               <small>정답 뒤 연결된 빈칸을 자동으로 골라줍니다.</small>
@@ -82,7 +90,7 @@
 
           <p id="setupError" class="form-error" aria-live="polite"></p>
           <div class="mode-actions">
-            <button type="submit" class="primary-action">이 기기에서 시작</button>
+            <button type="submit" class="primary-action">혼자서 하기</button>
             <button id="createOnlineBtn" type="button" class="primary-action online-action">온라인 방 만들기</button>
           </div>
 
@@ -195,7 +203,7 @@
         <header class="game-header">
           <div>
             <p class="kicker">5학년 1학기: 둘레와 넓이</p>
-            <h1>수학 RPG 대전</h1>
+            <h1>도형 RPG 대전</h1>
             <p id="rpgOnlineStatus" class="online-game-status"></p>
           </div>
           <div class="header-actions">
