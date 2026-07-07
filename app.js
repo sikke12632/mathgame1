@@ -85,6 +85,10 @@
     rpgStatPanel: $("rpgStatPanel"),
     rpgStatPointText: $("rpgStatPointText"),
     rpgAnswerReview: $("rpgAnswerReview"),
+    rpgTotalPointValue: $("rpgTotalPointValue"),
+    rpgUsedPointValue: $("rpgUsedPointValue"),
+    rpgRemainingPointValue: $("rpgRemainingPointValue"),
+    rpgAutoAllocateBtn: $("rpgAutoAllocateBtn"),
     rpgHpInvest: $("rpgHpInvest"),
     rpgAttackInvest: $("rpgAttackInvest"),
     rpgDefenseInvest: $("rpgDefenseInvest"),
@@ -428,6 +432,14 @@
     document.querySelectorAll("input[name='rpgZeroBonus']").forEach((input) => {
       input.addEventListener("change", renderRpgStatPreview);
     });
+
+    document.querySelectorAll("input[name='rpgAutoBuild']").forEach((input) => {
+      input.addEventListener("change", renderRpgStatPreview);
+    });
+
+    if (els.rpgAutoAllocateBtn) {
+      els.rpgAutoAllocateBtn.addEventListener("click", autoAllocateRpgStats);
+    }
 
     if (els.rpgLockStatsBtn) {
       els.rpgLockStatsBtn.addEventListener("click", () => {
@@ -996,6 +1008,7 @@
         : "상대 스탯 투자 대기 중"
       : `A ${state.statLocked.player1 ? "확정" : "대기"} | B ${state.statLocked.player2 ? "확정" : "대기"}`;
     els.rpgLockStatsBtn.disabled = locked || !canActRpg();
+    setRpgStatControlsDisabled(locked || !canActRpg());
 
     els.rpgAnswerReview.innerHTML = (state.problems || [])
       .map((problem, index) => {
@@ -1007,6 +1020,18 @@
       .join("");
 
     renderRpgStatPreview();
+  }
+
+  function setRpgStatControlsDisabled(disabled) {
+    [els.rpgHpInvest, els.rpgAttackInvest, els.rpgDefenseInvest].forEach((input) => {
+      if (input) input.disabled = disabled;
+    });
+    document.querySelectorAll("input[name='rpgZeroBonus'], input[name='rpgAutoBuild']").forEach((input) => {
+      input.disabled = disabled;
+    });
+    if (els.rpgAutoAllocateBtn) {
+      els.rpgAutoAllocateBtn.disabled = disabled;
+    }
   }
 
   function fillRpgStatInputs(player) {
@@ -1034,6 +1059,82 @@
     };
   }
 
+  function selectedRpgAutoBuild() {
+    const input = document.querySelector("input[name='rpgAutoBuild']:checked");
+    return input && input.value === "defense" ? "defense" : "attack";
+  }
+
+  function autoAllocateRpgStats() {
+    if (!isRpgState() || state.phase !== "rpgStatAllocation" || !canActRpg()) return;
+    const player = activeRpgPlayer();
+    if (!player || state.statLocked[player]) return;
+    const score = state.solveScores[player] || 0;
+    const build = selectedRpgAutoBuild();
+    const allocation = calculateAutoRpgAllocation(score, build);
+
+    els.rpgHpInvest.value = allocation.hpInvest;
+    els.rpgAttackInvest.value = allocation.attackInvest;
+    els.rpgDefenseInvest.value = allocation.defenseInvest;
+
+    const zeroBonusInput = document.querySelector(`input[name='rpgZeroBonus'][value='${build}']`);
+    if (zeroBonusInput) zeroBonusInput.checked = true;
+
+    renderRpgStatPreview();
+  }
+
+  function calculateAutoRpgAllocation(totalPoints, build) {
+    const total = Math.max(0, Math.floor(Number(totalPoints) || 0));
+    if (total === 0) {
+      return {
+        totalPoints: 0,
+        hpInvest: 0,
+        attackInvest: 0,
+        defenseInvest: 0,
+        zeroPointArchetype: build === "defense" ? "defense" : "attack",
+      };
+    }
+
+    let hpInvest = Math.floor(total * 0.35);
+    if (total >= 3 && hpInvest < 1) hpInvest = 1;
+
+    let combatPoints = total - hpInvest;
+    if (combatPoints <= 0) {
+      hpInvest = Math.max(0, total - 1);
+      combatPoints = total - hpInvest;
+    }
+
+    let primaryInvest = Math.ceil(combatPoints * 0.65);
+    let secondaryInvest = combatPoints - primaryInvest;
+
+    if (primaryInvest <= secondaryInvest) {
+      primaryInvest += 1;
+      secondaryInvest -= 1;
+    }
+
+    if (secondaryInvest < 0) {
+      hpInvest += secondaryInvest;
+      secondaryInvest = 0;
+    }
+
+    if (build === "defense") {
+      return {
+        totalPoints: total,
+        hpInvest,
+        attackInvest: secondaryInvest,
+        defenseInvest: primaryInvest,
+        zeroPointArchetype: "defense",
+      };
+    }
+
+    return {
+      totalPoints: total,
+      hpInvest,
+      attackInvest: primaryInvest,
+      defenseInvest: secondaryInvest,
+      zeroPointArchetype: "attack",
+    };
+  }
+
   function renderRpgStatPreview() {
     if (!isRpgState() || state.phase !== "rpgStatAllocation") return;
     const player = activeRpgPlayer();
@@ -1041,12 +1142,20 @@
     const stats = core.calculateRpgStats(input);
     const check = core.validateRpgStatInput(input);
     const locked = state.statLocked[player];
+    const usedPoints = input.hpInvest + input.attackInvest + input.defenseInvest;
+    const remainingPoints = input.totalPoints - usedPoints;
 
+    if (els.rpgTotalPointValue) els.rpgTotalPointValue.textContent = input.totalPoints;
+    if (els.rpgUsedPointValue) els.rpgUsedPointValue.textContent = usedPoints;
+    if (els.rpgRemainingPointValue) {
+      els.rpgRemainingPointValue.textContent = remainingPoints;
+      els.rpgRemainingPointValue.parentElement.classList.toggle("over", remainingPoints < 0);
+    }
     els.rpgPreviewHp.textContent = stats.maxHp;
     els.rpgPreviewAttack.textContent = stats.attack;
     els.rpgPreviewDefense.textContent = stats.defense;
     els.rpgPreviewArchetype.textContent = stats.archetype === "attack" ? "공격형" : "방어형";
-    els.rpgStatError.textContent = state.lastRpgError || (check.ok ? "" : check.message);
+    els.rpgStatError.textContent = check.ok ? "" : check.message;
     els.rpgLockStatsBtn.disabled = !check.ok || locked || !canActRpg();
   }
 
