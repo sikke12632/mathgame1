@@ -88,6 +88,40 @@ p {
   padding: 28px 0;
 }
 
+.how-to-button {
+  margin-top: 18px;
+}
+
+.how-to-panel {
+  width: min(430px, 100%);
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.how-to-panel h2 {
+  margin: 0 0 10px;
+  font-size: 1.05rem;
+}
+
+.how-to-panel ol {
+  margin: 0;
+  padding-left: 22px;
+  display: grid;
+  gap: 7px;
+  font-weight: 850;
+  line-height: 1.45;
+}
+
+.how-to-panel p {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-weight: 850;
+}
+
 .setup-form,
 .side-panel,
 .board-panel,
@@ -222,6 +256,49 @@ legend {
   gap: 8px;
 }
 
+.mode-select-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.mode-card-option {
+  min-height: 86px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+  cursor: pointer;
+}
+
+.mode-card-option input {
+  margin-top: 5px;
+  accent-color: var(--player-a);
+}
+
+.mode-card-option span {
+  display: grid;
+  gap: 4px;
+}
+
+.mode-card-option strong {
+  font-weight: 1000;
+}
+
+.mode-card-option small {
+  color: var(--muted);
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.mode-card-option:has(input:checked) {
+  border-color: var(--player-a);
+  background: var(--player-a-soft);
+}
+
 .online-join-box {
   display: grid;
   gap: 8px;
@@ -252,6 +329,11 @@ legend {
 }
 
 .game-screen {
+  display: grid;
+  gap: 18px;
+}
+
+.rpg-screen {
   display: grid;
   gap: 18px;
 }
@@ -312,6 +394,11 @@ legend {
 .player-badge.player2 {
   background: var(--player-b-soft);
   color: var(--player-b);
+}
+
+.player-badge.neutral {
+  background: #e5e7eb;
+  color: #374151;
 }
 
 .turn-text {
@@ -466,10 +553,188 @@ legend {
 .problem-panel,
 .paint-panel,
 .feedback-panel,
-.notice-panel {
+.notice-panel,
+.round-order-panel,
+.rpg-panel {
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 14px;
+}
+
+.rpg-panel {
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 12px;
+}
+
+.rpg-stat-grid,
+.rpg-fighters,
+.rpg-choice-buttons {
+  display: grid;
+  gap: 12px;
+}
+
+.rpg-stat-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.rpg-stat-grid label {
+  display: grid;
+  gap: 6px;
+  font-weight: 900;
+}
+
+.rpg-stat-grid input {
+  min-height: 42px;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.rpg-fighters {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.rpg-fighter-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.rpg-fighter-card h2,
+.rpg-fighter-card p {
+  margin: 0;
+}
+
+.rpg-health {
+  height: 18px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.rpg-health span {
+  display: block;
+  height: 100%;
+  width: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #22c55e, #84cc16);
+  transition: width 0.2s ease;
+}
+
+.rpg-choice-buttons {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.rpg-battle-log,
+.rpg-answer-review {
+  display: grid;
+  gap: 8px;
+}
+
+.rpg-battle-log p,
+.rpg-answer-review p {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f1f5f9;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.round-order-panel {
+  display: grid;
+  gap: 10px;
+  border-color: #f59e0b;
+  background: #fffbeb;
+}
+
+.round-order-eyebrow {
+  margin: 0;
+  color: #92400e;
+  font-size: 0.78rem;
+  font-weight: 1000;
+}
+
+.round-order-panel h2 {
+  margin: 0;
+  font-size: 1.45rem;
+  line-height: 1.15;
+}
+
+.round-order-badges {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.round-order-badge {
+  min-height: 62px;
+  display: grid;
+  align-content: center;
+  gap: 2px;
+  padding: 10px;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  font-weight: 1000;
+}
+
+.round-order-badge strong {
+  font-size: 1.25rem;
+}
+
+.round-order-badge span {
+  font-size: 0.82rem;
+}
+
+.round-order-badge.first {
+  border-color: #f59e0b;
+  background: #fef3c7;
+  color: #78350f;
+}
+
+.round-order-badge.second {
+  border-color: #0ea5e9;
+  background: #e0f2fe;
+  color: #075985;
+}
+
+.round-order-badge.solo {
+  grid-column: 1 / -1;
+  border-color: #16a34a;
+  background: #dcfce7;
+  color: #166534;
+}
+
+.round-order-badge.none {
+  grid-column: 1 / -1;
+  border-color: #9ca3af;
+  background: #f3f4f6;
+  color: #374151;
+}
+
+.round-order-message,
+.round-order-detail {
+  margin: 0;
+  font-weight: 900;
+  line-height: 1.45;
+}
+
+.round-order-detail {
+  color: #92400e;
+}
+
+.round-order-panel.protected {
+  border-color: #7c3aed;
+  background: #f5f3ff;
+}
+
+.round-order-panel.protected .round-order-detail {
+  color: #5b21b6;
 }
 
 .notice-panel {
@@ -648,7 +913,11 @@ legend {
 
   .segmented,
   .shape-grid,
-  .result-grid {
+  .result-grid,
+  .mode-select-grid,
+  .rpg-stat-grid,
+  .rpg-fighters,
+  .rpg-choice-buttons {
     grid-template-columns: 1fr;
   }
 

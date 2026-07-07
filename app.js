@@ -8,6 +8,8 @@
     setupScreen: $("setupScreen"),
     setupForm: $("setupForm"),
     setupError: $("setupError"),
+    howToPlayBtn: $("howToPlayBtn"),
+    howToPlayPanel: $("howToPlayPanel"),
     shapeChoices: $("shapeChoices"),
     autoFillInput: $("autoFillInput"),
     createOnlineBtn: $("createOnlineBtn"),
@@ -23,6 +25,12 @@
     turnText: $("turnText"),
     phaseText: $("phaseText"),
     skipNotice: $("skipNotice"),
+    roundOrderPanel: $("roundOrderPanel"),
+    roundOrderEyebrow: $("roundOrderEyebrow"),
+    roundOrderTitle: $("roundOrderTitle"),
+    roundOrderBadges: $("roundOrderBadges"),
+    roundOrderMessage: $("roundOrderMessage"),
+    roundOrderDetail: $("roundOrderDetail"),
     problemPanel: $("problemPanel"),
     problemType: $("problemType"),
     timerText: $("timerText"),
@@ -31,6 +39,7 @@
     problemPrompt: $("problemPrompt"),
     formulaText: $("formulaText"),
     answerForm: $("answerForm"),
+    answerLabel: $("answerLabel"),
     answerInput: $("answerInput"),
     paintPanel: $("paintPanel"),
     earnedCells: $("earnedCells"),
@@ -59,6 +68,46 @@
     resultP1Final: $("resultP1Final"),
     resultP2Cells: $("resultP2Cells"),
     resultP2Final: $("resultP2Final"),
+    rpgScreen: $("rpgScreen"),
+    rpgOnlineStatus: $("rpgOnlineStatus"),
+    rpgBackSetupBtn: $("rpgBackSetupBtn"),
+    rpgSolvingPanel: $("rpgSolvingPanel"),
+    rpgProblemCount: $("rpgProblemCount"),
+    rpgScoreText: $("rpgScoreText"),
+    rpgShapeName: $("rpgShapeName"),
+    rpgDiagramBox: $("rpgDiagramBox"),
+    rpgProblemPrompt: $("rpgProblemPrompt"),
+    rpgFormulaText: $("rpgFormulaText"),
+    rpgAnswerForm: $("rpgAnswerForm"),
+    rpgAnswerInput: $("rpgAnswerInput"),
+    rpgOpponentSolveStatus: $("rpgOpponentSolveStatus"),
+    rpgStatPanel: $("rpgStatPanel"),
+    rpgStatPointText: $("rpgStatPointText"),
+    rpgAnswerReview: $("rpgAnswerReview"),
+    rpgHpInvest: $("rpgHpInvest"),
+    rpgAttackInvest: $("rpgAttackInvest"),
+    rpgDefenseInvest: $("rpgDefenseInvest"),
+    rpgZeroBonusBox: $("rpgZeroBonusBox"),
+    rpgPreviewHp: $("rpgPreviewHp"),
+    rpgPreviewAttack: $("rpgPreviewAttack"),
+    rpgPreviewDefense: $("rpgPreviewDefense"),
+    rpgPreviewArchetype: $("rpgPreviewArchetype"),
+    rpgStatError: $("rpgStatError"),
+    rpgLockStatsBtn: $("rpgLockStatsBtn"),
+    rpgOpponentStatStatus: $("rpgOpponentStatStatus"),
+    rpgBattlePanel: $("rpgBattlePanel"),
+    rpgP1HpBar: $("rpgP1HpBar"),
+    rpgP2HpBar: $("rpgP2HpBar"),
+    rpgP1Stats: $("rpgP1Stats"),
+    rpgP2Stats: $("rpgP2Stats"),
+    rpgTurnText: $("rpgTurnText"),
+    rpgChoiceStatus: $("rpgChoiceStatus"),
+    rpgBattleLog: $("rpgBattleLog"),
+    rpgResultPanel: $("rpgResultPanel"),
+    rpgWinnerTitle: $("rpgWinnerTitle"),
+    rpgFinishReason: $("rpgFinishReason"),
+    rpgFinalSummary: $("rpgFinalSummary"),
+    rpgResultSetupBtn: $("rpgResultSetupBtn"),
   };
 
   let state = null;
@@ -70,6 +119,10 @@
   let dragState = null;
   let selectionHistory = [];
   let online = createOfflineSession();
+  let selectedGameMode = "territory";
+  let rpgChoiceSecrets = {};
+  let lastRpgStatPlayer = "";
+  let lastRenderedRpgProblemKey = "";
 
   const ANIMAL_NAMES = [
     "다람쥐",
@@ -102,6 +155,7 @@
       syncing: false,
       configured: false,
       configError: "",
+      serverTimeOffset: 0,
     };
   }
 
@@ -164,6 +218,9 @@
         }
         online.db = window.firebase.database();
         online.configured = true;
+        online.db.ref(".info/serverTimeOffset").on("value", (snapshot) => {
+          online.serverTimeOffset = Number(snapshot.val()) || 0;
+        });
       } catch (error) {
         online.configError = "Firebase 초기화에 실패했습니다. 설정값과 databaseURL을 확인해 주세요.";
       }
@@ -186,17 +243,36 @@
   }
 
   function bindEvents() {
+    els.howToPlayBtn.addEventListener("click", () => {
+      const nextOpen = els.howToPlayPanel.hidden;
+      els.howToPlayPanel.hidden = !nextOpen;
+      els.howToPlayBtn.setAttribute("aria-expanded", String(nextOpen));
+      els.howToPlayBtn.textContent = nextOpen ? "플레이 방법 닫기" : "플레이 방법";
+    });
+
     els.setupForm.addEventListener("submit", (event) => {
       event.preventDefault();
       const settings = collectSettings();
       if (!settings) return;
       leaveOnlineRoom();
       lastSettings = settings;
-      state = core.createGameState(settings);
+      selectedGameMode = collectGameMode();
+      state =
+        selectedGameMode === "rpg"
+          ? core.createRpgState(settings, "local-" + Date.now())
+          : core.createGameState(settings);
       lastRenderedProblemId = null;
       selectionHistory = [];
+      rpgChoiceSecrets = {};
+      lastRpgStatPlayer = "";
       render();
-      window.setTimeout(() => els.answerInput.focus(), 0);
+      window.setTimeout(() => {
+        if (state && state.gameMode === "rpg" && els.rpgAnswerInput) {
+          els.rpgAnswerInput.focus();
+        } else {
+          els.answerInput.focus();
+        }
+      }, 0);
     });
 
     els.createOnlineBtn.addEventListener("click", async () => {
@@ -217,13 +293,13 @@
     els.answerForm.addEventListener("submit", (event) => {
       event.preventDefault();
       if (!state || state.phase !== "question" || !canAct()) return;
-      const nextState = core.submitAnswer(state, els.answerInput.value);
-      if (nextState.phase === "painting") {
-        selectionHistory = [];
-      }
+      const submitter = activeSubmitter();
+      if (!submitter) return;
+      const nextState = core.submitAnswer(state, submitter, els.answerInput.value, currentSubmittedAt());
       commitState(nextState);
-      if (nextState.phase === "painting") {
-        els.board.focus();
+      if (nextState.phase === "question") {
+        els.answerInput.value = "";
+        window.setTimeout(() => els.answerInput.focus(), 0);
       }
     });
 
@@ -234,6 +310,8 @@
       commitState(nextState);
       if (nextState.phase === "question") {
         window.setTimeout(() => els.answerInput.focus(), 0);
+      } else if (nextState.phase === "painting") {
+        window.setTimeout(() => els.board.focus(), 0);
       }
     });
 
@@ -296,6 +374,63 @@
       render();
     });
 
+    if (els.rpgBackSetupBtn) {
+      els.rpgBackSetupBtn.addEventListener("click", () => {
+        leaveOnlineRoom();
+        state = null;
+        stopTimer();
+        render();
+      });
+    }
+
+    if (els.rpgResultSetupBtn) {
+      els.rpgResultSetupBtn.addEventListener("click", () => {
+        leaveOnlineRoom();
+        state = null;
+        stopTimer();
+        render();
+      });
+    }
+
+    if (els.rpgAnswerForm) {
+      els.rpgAnswerForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        if (!isRpgState() || !canActRpg()) return;
+        const player = activeRpgPlayer();
+        if (!player) return;
+        const nextState = core.submitRpgAnswer(state, player, els.rpgAnswerInput.value);
+        commitState(nextState);
+      });
+    }
+
+    ["rpgHpInvest", "rpgAttackInvest", "rpgDefenseInvest"].forEach((id) => {
+      const input = els[id];
+      if (input) input.addEventListener("input", renderRpgStatPreview);
+    });
+
+    document.querySelectorAll("input[name='rpgZeroBonus']").forEach((input) => {
+      input.addEventListener("change", renderRpgStatPreview);
+    });
+
+    if (els.rpgLockStatsBtn) {
+      els.rpgLockStatsBtn.addEventListener("click", () => {
+        if (!isRpgState() || !canActRpg()) return;
+        const player = activeRpgPlayer();
+        if (!player) return;
+        const input = collectRpgStatInput(player);
+        const nextState = core.lockRpgStats(state, player, input);
+        lastRpgStatPlayer = "";
+        commitState(nextState);
+      });
+    }
+
+    document.querySelectorAll("[data-rpg-choice]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        if (!isRpgState() || !canActRpg()) return;
+        await chooseRpgBattle(button.dataset.rpgChoice);
+      });
+    });
+
     els.board.addEventListener("pointerdown", onBoardPointerDown);
     els.board.addEventListener("pointermove", onBoardPointerMove);
     els.board.addEventListener("pointerup", onBoardPointerUp);
@@ -316,6 +451,15 @@
       difficulty: formData.get("difficulty"),
       autoFill: els.autoFillInput.checked,
     });
+  }
+
+  function collectGameMode() {
+    const input = document.querySelector("input[name='gameMode']:checked");
+    return input && input.value === "rpg" ? "rpg" : "territory";
+  }
+
+  function isRpgState() {
+    return state && state.gameMode === "rpg";
   }
 
   function normalizeRoomCode(value) {
@@ -345,22 +489,108 @@
     return online.active && online.roomRef;
   }
 
+  function hasSubmitted(player) {
+    return Boolean(state && state.submissions && state.submissions[player]);
+  }
+
+  function activeSubmitter() {
+    if (!state || state.phase !== "question") return null;
+    if (isOnline()) {
+      return hasSubmitted(online.role) ? null : online.role;
+    }
+    return core.PLAYER_KEYS.find((player) => !hasSubmitted(player)) || null;
+  }
+
+  function currentSubmittedAt() {
+    return Date.now() + (isOnline() ? online.serverTimeOffset || 0 : 0);
+  }
+
+  function activeRpgPlayer() {
+    if (!isRpgState()) return null;
+    if (isOnline()) return online.role;
+    if (state.phase === "rpgSolving") {
+      return core.PLAYER_KEYS.find((player) => !state.solveFinished[player]) || "player1";
+    }
+    if (state.phase === "rpgStatAllocation") {
+      return core.PLAYER_KEYS.find((player) => !state.statLocked[player]) || "player1";
+    }
+    if (state.phase === "rpgBattle" && state.battle) {
+      const turnKey = String(state.battle.turnIndex);
+      const choices = (state.battle.choices && state.battle.choices[turnKey]) || {};
+      return core.PLAYER_KEYS.find((player) => !choices[player]) || "player1";
+    }
+    return "player1";
+  }
+
+  function canActRpg() {
+    if (!isRpgState()) return false;
+    if (!isOnline()) return true;
+    return Boolean(online.room && online.room.players && online.room.players.player2);
+  }
+
   function canAct() {
     if (!state) return false;
     if (!isOnline()) return true;
     const hasOpponent = Boolean(online.room && online.room.players && online.room.players.player2);
     if (!hasOpponent && state.phase !== "gameover") return false;
-    return state.currentPlayer === online.role;
+    if (state.phase === "question") {
+      return !hasSubmitted(online.role);
+    }
+    if (state.phase === "round-result") {
+      const queue = state.actionQueue || [];
+      if (!queue.length) return online.role === "player1";
+      return queue[0] === online.role;
+    }
+    if (state.phase === "painting" || state.phase === "feedback") {
+      return state.currentPlayer === online.role;
+    }
+    return false;
   }
 
   function reviveRemoteState(remoteState) {
     if (!remoteState) return null;
+    if (remoteState.gameMode === "rpg") {
+      return reviveRpgRemoteState(remoteState);
+    }
     return Object.assign({}, remoteState, {
       board: listFromFirebase(remoteState.board),
       problemHistory: listFromFirebase(remoteState.problemHistory),
       selection: listFromFirebase(remoteState.selection),
+      actionQueue: listFromFirebase(remoteState.actionQueue),
       skippedTurns: listFromFirebase(remoteState.skippedTurns),
       turnCounts: Object.assign({ player1: 0, player2: 0 }, remoteState.turnCounts || {}),
+      roundIndex: remoteState.roundIndex || 0,
+      currentActionIndex: remoteState.currentActionIndex || 0,
+      submissions: Object.assign(core.createEmptySubmissions(), remoteState.submissions || {}),
+      lastFirstActor: remoteState.lastFirstActor || null,
+      consecutiveFirstActorCount: remoteState.consecutiveFirstActorCount || 0,
+    });
+  }
+
+  function reviveRpgRemoteState(remoteState) {
+    const battle = remoteState.battle
+      ? Object.assign({}, remoteState.battle, {
+          hp: Object.assign({ player1: 0, player2: 0 }, remoteState.battle.hp || {}),
+          choices: Object.assign({}, remoteState.battle.choices || {}),
+          reveals: Object.assign({}, remoteState.battle.reveals || {}),
+          logs: listFromFirebase(remoteState.battle.logs),
+        })
+      : null;
+    return Object.assign({}, remoteState, {
+      gameMode: "rpg",
+      problems: listFromFirebase(remoteState.problems),
+      answers: {
+        player1: listFromFirebase(remoteState.answers && remoteState.answers.player1),
+        player2: listFromFirebase(remoteState.answers && remoteState.answers.player2),
+      },
+      solveScores: Object.assign({ player1: 0, player2: 0 }, remoteState.solveScores || {}),
+      solveFinished: Object.assign({ player1: false, player2: false }, remoteState.solveFinished || {}),
+      statAllocations: Object.assign({ player1: null, player2: null }, remoteState.statAllocations || {}),
+      statLocked: Object.assign({ player1: false, player2: false }, remoteState.statLocked || {}),
+      battle,
+      winner: remoteState.winner || null,
+      finishReason: remoteState.finishReason || null,
+      lastRpgError: remoteState.lastRpgError || "",
     });
   }
 
@@ -390,9 +620,15 @@
       const existing = await roomRef.once("value");
       if (existing.exists()) continue;
 
-      const nextState = core.createGameState(settings);
+      const gameMode = collectGameMode();
+      selectedGameMode = gameMode;
+      const nextState =
+        gameMode === "rpg"
+          ? core.createRpgState(settings, code)
+          : core.createGameState(settings);
       await roomRef.set({
         roomCode: code,
+        gameMode,
         status: "waiting",
         createdAt: Date.now(),
         updatedAt: Date.now(),
@@ -405,6 +641,8 @@
         settings,
         state: nextState,
       });
+      rpgChoiceSecrets = {};
+      lastRpgStatPlayer = "";
       enterOnlineRoom(roomRef, code, "player1", nickname);
       renderOnlineSetupStatus(`방 코드 ${code}로 만들었습니다. 내 닉네임은 ${nickname}입니다.`);
       return;
@@ -445,6 +683,9 @@
         joinedAt: Date.now(),
       },
     });
+    selectedGameMode = room.gameMode || (room.state && room.state.gameMode) || "territory";
+    rpgChoiceSecrets = {};
+    lastRpgStatPlayer = "";
     enterOnlineRoom(roomRef, code, "player2", nickname);
     renderOnlineSetupStatus(`방 코드 ${code}에 입장했습니다. 내 닉네임은 ${nickname}입니다.`);
   }
@@ -468,6 +709,7 @@
       online.syncing = true;
       state = incoming;
       lastSettings = incoming.settings || lastSettings;
+      selectedGameMode = incoming.gameMode || "territory";
       if (previousProblemId !== incomingProblemId) {
         lastRenderedProblemId = null;
       }
@@ -485,7 +727,11 @@
       db: online.db,
       configured: online.configured,
       configError: online.configError,
+      serverTimeOffset: online.serverTimeOffset || 0,
     });
+    rpgChoiceSecrets = {};
+    lastRpgStatPlayer = "";
+    lastRenderedRpgProblemKey = "";
   }
 
   function commitState(nextState, meta) {
@@ -554,6 +800,7 @@
       els.setupScreen.hidden = false;
       els.gameScreen.hidden = true;
       els.resultScreen.hidden = true;
+      if (els.rpgScreen) els.rpgScreen.hidden = true;
       stopTimer();
       return;
     }
@@ -562,22 +809,307 @@
       els.setupScreen.hidden = true;
       els.gameScreen.hidden = true;
       els.resultScreen.hidden = false;
+      if (els.rpgScreen) els.rpgScreen.hidden = true;
       stopTimer();
       renderResults();
+      return;
+    }
+
+    if (isRpgState()) {
+      renderRpg();
+      stopTimer();
       return;
     }
 
     els.setupScreen.hidden = true;
     els.gameScreen.hidden = false;
     els.resultScreen.hidden = true;
+    if (els.rpgScreen) els.rpgScreen.hidden = true;
     renderScore();
     renderBoard();
+    renderRoundOrderPanel();
     renderProblem();
     renderPaintPanel();
     renderFeedbackPanel();
     renderSkipNotice();
     renderOnlineGameStatus();
     startTimerIfNeeded();
+  }
+
+  function renderRpg() {
+    els.setupScreen.hidden = true;
+    els.gameScreen.hidden = true;
+    els.resultScreen.hidden = true;
+    els.rpgScreen.hidden = false;
+
+    renderRpgOnlineStatus();
+    renderRpgPanels();
+  }
+
+  function renderRpgOnlineStatus() {
+    if (!els.rpgOnlineStatus) return;
+    if (!isOnline()) {
+      els.rpgOnlineStatus.textContent = "로컬 RPG 대전";
+      return;
+    }
+    const players = (online.room && online.room.players) || {};
+    const opponentRole = online.role === "player1" ? "player2" : "player1";
+    const opponent = players[opponentRole];
+    els.rpgOnlineStatus.textContent = opponent
+      ? `온라인 방 ${online.roomCode} | 내 닉네임 ${online.nickname} | 상대 ${opponent.nickname}`
+      : `온라인 방 ${online.roomCode} | 내 닉네임 ${online.nickname} | 상대 학생에게 방 코드를 알려주세요.`;
+  }
+
+  function renderRpgPanels() {
+    const phase = state.phase;
+    els.rpgSolvingPanel.hidden = phase !== "rpgSolving";
+    els.rpgStatPanel.hidden = phase !== "rpgStatAllocation";
+    els.rpgBattlePanel.hidden = phase !== "rpgBattle";
+    els.rpgResultPanel.hidden = phase !== "rpgFinished";
+
+    if (phase === "rpgSolving") renderRpgSolving();
+    if (phase === "rpgStatAllocation") renderRpgStats();
+    if (phase === "rpgBattle") renderRpgBattle();
+    if (phase === "rpgFinished") renderRpgResult();
+  }
+
+  function renderRpgSolving() {
+    const player = activeRpgPlayer();
+    const index = core.rpgPlayerAnswerIndex(state, player);
+    const problem = state.problems[index];
+    const score = state.solveScores[player] || 0;
+    const opponent = core.opponentOf(player);
+    const opponentIndex = core.rpgPlayerAnswerIndex(state, opponent);
+    const canSubmit = canActRpg() && Boolean(problem);
+
+    els.rpgScoreText.textContent = `${core.playerLabel(player)} ${score}점`;
+    els.rpgOpponentSolveStatus.textContent = isOnline()
+      ? `상대 진행: ${Math.min(opponentIndex, core.RPG_PROBLEM_COUNT)}/${core.RPG_PROBLEM_COUNT}`
+      : `현재 풀이: ${core.playerLabel(player)} | A ${core.rpgPlayerAnswerIndex(state, "player1")}/5, B ${core.rpgPlayerAnswerIndex(state, "player2")}/5`;
+
+    if (!problem) {
+      els.rpgProblemCount.textContent = "풀이 완료";
+      els.rpgShapeName.textContent = "대기";
+      els.rpgDiagramBox.innerHTML = "";
+      els.rpgProblemPrompt.textContent = "상대가 문제 풀이를 마치기를 기다리는 중입니다.";
+      els.rpgFormulaText.textContent = "";
+      els.rpgAnswerForm.hidden = true;
+      return;
+    }
+
+    const problemKey = `${player}:${problem.id}:${index}`;
+    els.rpgProblemCount.textContent = `${core.playerLabel(player)} 문제 ${index + 1}/${core.RPG_PROBLEM_COUNT}`;
+    els.rpgShapeName.textContent = core.SHAPES[problem.shape];
+    els.rpgProblemPrompt.textContent = problem.prompt;
+    els.rpgFormulaText.textContent = problem.formulaText;
+    els.rpgDiagramBox.innerHTML = buildDiagram(problem);
+    els.rpgAnswerForm.hidden = false;
+    els.rpgAnswerInput.disabled = !canSubmit;
+    const submitButton = els.rpgAnswerForm.querySelector("button[type='submit']");
+    if (submitButton) submitButton.disabled = !canSubmit;
+    if (lastRenderedRpgProblemKey !== problemKey) {
+      els.rpgAnswerInput.value = "";
+      lastRenderedRpgProblemKey = problemKey;
+    }
+  }
+
+  function renderRpgStats() {
+    const player = activeRpgPlayer();
+    const opponent = core.opponentOf(player);
+    const score = state.solveScores[player] || 0;
+    const locked = state.statLocked[player];
+    const opponentLocked = state.statLocked[opponent];
+
+    if (lastRpgStatPlayer !== player) {
+      fillRpgStatInputs(player);
+      lastRpgStatPlayer = player;
+    }
+
+    els.rpgStatPointText.textContent = `${core.playerLabel(player)} 획득 스탯 포인트: ${score}점`;
+    els.rpgZeroBonusBox.hidden = score !== 0;
+    els.rpgOpponentStatStatus.textContent = isOnline()
+      ? opponentLocked
+        ? "상대 스탯 확정 완료"
+        : "상대 스탯 투자 대기 중"
+      : `A ${state.statLocked.player1 ? "확정" : "대기"} | B ${state.statLocked.player2 ? "확정" : "대기"}`;
+    els.rpgLockStatsBtn.disabled = locked || !canActRpg();
+
+    els.rpgAnswerReview.innerHTML = (state.problems || [])
+      .map((problem, index) => {
+        const answer = state.answers[player][index];
+        if (!answer) return "";
+        const submitted = answer.submittedAnswer == null ? "시간초과" : answer.submittedAnswer;
+        return `<p>${index + 1}. ${answer.isCorrect ? "정답" : "오답"} | 내 답: ${submitted} | 정답: ${problem.answer} | 획득 ${answer.earnedPoints}점</p>`;
+      })
+      .join("");
+
+    renderRpgStatPreview();
+  }
+
+  function fillRpgStatInputs(player) {
+    const score = state.solveScores[player] || 0;
+    const saved = state.statAllocations[player];
+    if (saved) {
+      els.rpgHpInvest.value = saved.hpInvest;
+      els.rpgAttackInvest.value = saved.attackInvest;
+      els.rpgDefenseInvest.value = saved.defenseInvest;
+      return;
+    }
+    els.rpgHpInvest.value = 0;
+    els.rpgAttackInvest.value = score;
+    els.rpgDefenseInvest.value = 0;
+  }
+
+  function collectRpgStatInput(player) {
+    const zeroInput = document.querySelector("input[name='rpgZeroBonus']:checked");
+    return {
+      totalPoints: state.solveScores[player] || 0,
+      hpInvest: Number(els.rpgHpInvest.value || 0),
+      attackInvest: Number(els.rpgAttackInvest.value || 0),
+      defenseInvest: Number(els.rpgDefenseInvest.value || 0),
+      zeroPointArchetype: zeroInput && zeroInput.value === "defense" ? "defense" : "attack",
+    };
+  }
+
+  function renderRpgStatPreview() {
+    if (!isRpgState() || state.phase !== "rpgStatAllocation") return;
+    const player = activeRpgPlayer();
+    const input = collectRpgStatInput(player);
+    const stats = core.calculateRpgStats(input);
+    const check = core.validateRpgStatInput(input);
+    const locked = state.statLocked[player];
+
+    els.rpgPreviewHp.textContent = stats.maxHp;
+    els.rpgPreviewAttack.textContent = stats.attack;
+    els.rpgPreviewDefense.textContent = stats.defense;
+    els.rpgPreviewArchetype.textContent = stats.archetype === "attack" ? "공격형" : "방어형";
+    els.rpgStatError.textContent = state.lastRpgError || (check.ok ? "" : check.message);
+    els.rpgLockStatsBtn.disabled = !check.ok || locked || !canActRpg();
+  }
+
+  function renderRpgBattle() {
+    const p1Stats = state.statAllocations.player1;
+    const p2Stats = state.statAllocations.player2;
+    const hp = state.battle.hp;
+    const turnKey = String(state.battle.turnIndex);
+    const choices = (state.battle.choices && state.battle.choices[turnKey]) || {};
+    const player = activeRpgPlayer();
+    const opponent = core.opponentOf(player);
+
+    setHpBar(els.rpgP1HpBar, hp.player1, p1Stats.maxHp);
+    setHpBar(els.rpgP2HpBar, hp.player2, p2Stats.maxHp);
+    els.rpgP1Stats.textContent = `체력 ${hp.player1}/${p1Stats.maxHp} | 공격 ${p1Stats.attack} | 방어 ${p1Stats.defense} | ${p1Stats.archetype === "attack" ? "공격형" : "방어형"}`;
+    els.rpgP2Stats.textContent = `체력 ${hp.player2}/${p2Stats.maxHp} | 공격 ${p2Stats.attack} | 방어 ${p2Stats.defense} | ${p2Stats.archetype === "attack" ? "공격형" : "방어형"}`;
+    els.rpgTurnText.textContent = `${state.battle.turnIndex + 1}/${core.RPG_BATTLE_TURN_COUNT}턴`;
+    els.rpgChoiceStatus.textContent = isOnline()
+      ? `내 선택: ${choices[player] ? "완료" : "대기"} | 상대 선택: ${choices[opponent] ? "완료" : "대기"}`
+      : `현재 선택: ${core.playerLabel(player)} | A ${choices.player1 ? "완료" : "대기"} | B ${choices.player2 ? "완료" : "대기"}`;
+
+    document.querySelectorAll("[data-rpg-choice]").forEach((button) => {
+      button.disabled = !canActRpg() || Boolean(choices[player]);
+    });
+
+    els.rpgBattleLog.innerHTML = (state.battle.logs || [])
+      .map((log) => `<p>${log.turnIndex + 1}턴: ${log.message}</p>`)
+      .join("");
+
+    if (choices.player1 && choices.player2) {
+      window.setTimeout(revealPendingRpgChoices, 0);
+    }
+  }
+
+  function setHpBar(el, current, max) {
+    const percent = max > 0 ? Math.max(0, Math.min(100, (current / max) * 100)) : 0;
+    el.style.width = `${percent}%`;
+  }
+
+  function renderRpgResult() {
+    const winnerText =
+      state.winner === "draw" ? "무승부" : state.winner === "player1" ? "A 승리" : "B 승리";
+    els.rpgWinnerTitle.textContent = winnerText;
+    els.rpgFinishReason.textContent = state.finishReason || "";
+    els.rpgFinalSummary.innerHTML = `
+      <div class="result-box player1-line">
+        <h2>A</h2>
+        <p>최종 체력 <strong>${state.battle.hp.player1}</strong></p>
+        <p>문제 점수 <strong>${state.solveScores.player1}</strong></p>
+      </div>
+      <div class="result-box player2-line">
+        <h2>B</h2>
+        <p>최종 체력 <strong>${state.battle.hp.player2}</strong></p>
+        <p>문제 점수 <strong>${state.solveScores.player2}</strong></p>
+      </div>
+    `;
+  }
+
+  async function chooseRpgBattle(choice) {
+    const player = activeRpgPlayer();
+    if (!player || !state.battle) return;
+    const turnKey = String(state.battle.turnIndex);
+    const choices = (state.battle.choices && state.battle.choices[turnKey]) || {};
+    if (choices[player]) return;
+
+    const salt = createRpgSalt();
+    const commitHash = await sha256Text(`${choice}:${salt}`);
+    rpgChoiceSecrets[`${turnKey}:${player}`] = { choice, salt, commitHash };
+
+    const nextState = core.commitRpgChoice(state, player, commitHash);
+    commitState(nextState);
+    window.setTimeout(revealPendingRpgChoices, 0);
+  }
+
+  async function revealPendingRpgChoices() {
+    const latest = state;
+    if (!latest || latest.phase !== "rpgBattle" || !latest.battle) return;
+    const turnKey = String(latest.battle.turnIndex);
+    const choices = (latest.battle.choices && latest.battle.choices[turnKey]) || {};
+    const reveals = (latest.battle.reveals && latest.battle.reveals[turnKey]) || {};
+    if (!choices.player1 || !choices.player2) return;
+
+    let nextState = latest;
+    let changed = false;
+    for (const player of core.PLAYER_KEYS) {
+      if (reveals[player]) continue;
+      const secret = rpgChoiceSecrets[`${turnKey}:${player}`];
+      if (!secret) continue;
+      const ownCommit = choices[player] && choices[player].commitHash;
+      const hashOk = ownCommit === (await sha256Text(`${secret.choice}:${secret.salt}`));
+      nextState = core.revealRpgChoice(nextState, player, {
+        choice: secret.choice,
+        salt: secret.salt,
+        hashOk,
+      });
+      changed = true;
+    }
+    if (changed) {
+      commitState(nextState);
+    }
+  }
+
+  function createRpgSalt() {
+    if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+    return String(Date.now()) + "-" + Math.random().toString(36).slice(2);
+  }
+
+  async function sha256Text(text) {
+    if (!window.crypto || !window.crypto.subtle) {
+      return fallbackHashText(text);
+    }
+    const bytes = new TextEncoder().encode(text);
+    const digest = await window.crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+  }
+
+  function fallbackHashText(text) {
+    let hash = 0;
+    String(text)
+      .split("")
+      .forEach((char) => {
+        hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+      });
+    return String(hash);
   }
 
   function renderScore() {
@@ -588,14 +1120,22 @@
     els.p2Final.textContent = scores.player2.finalScore;
 
     const player = state.currentPlayer;
-    els.currentPlayerBadge.textContent = `${core.playerLabel(player)} 차례`;
-    els.currentPlayerBadge.className = `player-badge ${player}`;
-    const aTurn = Math.min(core.TURNS_PER_PLAYER, state.turnCounts.player1 + 1);
-    const bTurn = Math.min(core.TURNS_PER_PLAYER, state.turnCounts.player2 + 1);
-    els.turnText.textContent = `A ${aTurn}/5, B ${bTurn}/5`;
+    if (state.phase === "question") {
+      els.currentPlayerBadge.textContent = "동시 문제";
+      els.currentPlayerBadge.className = "player-badge neutral";
+    } else if (state.phase === "round-result") {
+      els.currentPlayerBadge.textContent = "순서 결정";
+      els.currentPlayerBadge.className = "player-badge neutral";
+    } else {
+      els.currentPlayerBadge.textContent = `${core.playerLabel(player)} 행동`;
+      els.currentPlayerBadge.className = `player-badge ${player}`;
+    }
+    const roundNumber = Math.min(core.TURNS_PER_PLAYER, (state.roundIndex || 0) + 1);
+    els.turnText.textContent = `라운드 ${roundNumber}/5`;
 
     const phaseLabel = {
       question: "문제 풀기",
+      "round-result": "순서 확인",
       painting: "색칠하기",
       feedback: "풀이 확인",
     }[state.phase];
@@ -617,6 +1157,8 @@
     if (state.phase === "painting") {
       els.boardHint.textContent =
         "드래그한 사각형 안에서 검은 칸과 연결되지 않은 칸은 자동으로 제외됩니다. 상대 칸은 획득 칸의 절반까지만 중립화할 수 있습니다.";
+    } else if (state.phase === "round-result") {
+      els.boardHint.textContent = "이번 라운드의 선공과 후공을 확인한 뒤 행동을 시작하세요.";
     } else if (state.phase === "feedback") {
       els.boardHint.textContent = "풀이를 확인한 뒤 다음 턴으로 넘어가세요.";
     } else {
@@ -633,6 +1175,75 @@
     return "";
   }
 
+  function orderBadge(player, title, caption, kind) {
+    return `<div class="round-order-badge ${kind || ""}">
+      <strong>${title}</strong>
+      <span>${caption || core.playerLabel(player)}</span>
+    </div>`;
+  }
+
+  function renderRoundOrderPanel() {
+    const visible =
+      state &&
+      ["round-result", "painting", "feedback"].includes(state.phase) &&
+      (state.roundResult || (state.actionQueue && state.actionQueue.length));
+    els.roundOrderPanel.hidden = !visible;
+    if (!visible) return;
+
+    const result = state.roundResult || {};
+    const queue = state.actionQueue || [];
+    els.roundOrderPanel.className = `round-order-panel${result.protectedApplied ? " protected" : ""}`;
+    els.roundOrderEyebrow.textContent = `이번 라운드`;
+
+    if (state.phase === "painting") {
+      const current = state.currentPlayer;
+      const nextActor = queue[(state.currentActionIndex || 0) + 1];
+      els.roundOrderTitle.textContent = `현재 행동: ${core.playerLabel(current)}`;
+      els.roundOrderBadges.innerHTML = nextActor
+        ? orderBadge(current, `${core.playerLabel(current)} 행동 중`, "현재 행동", "first") +
+          orderBadge(nextActor, `${core.playerLabel(nextActor)} 대기`, "다음 행동", "second")
+        : orderBadge(current, `${core.playerLabel(current)}만 행동`, "이번 라운드 단독 행동", "solo");
+      els.roundOrderMessage.textContent = nextActor
+        ? `현재 행동은 ${core.playerLabel(current)}입니다. 다음 행동은 ${core.playerLabel(nextActor)}입니다.`
+        : `이번 라운드는 ${core.playerLabel(current)}만 행동합니다.`;
+      els.roundOrderDetail.textContent = result.protectedApplied ? `보호 규칙 적용! ${result.detail}` : result.detail || "";
+      return;
+    }
+
+    if (state.phase === "feedback") {
+      const nextActor = queue[(state.currentActionIndex || 0) + 1];
+      els.roundOrderTitle.textContent = nextActor
+        ? `다음 행동: ${core.playerLabel(nextActor)}`
+        : "이번 라운드 행동 완료";
+      els.roundOrderBadges.innerHTML = nextActor
+        ? orderBadge(nextActor, `${core.playerLabel(nextActor)} 행동`, "다음 행동", "second")
+        : orderBadge(state.currentPlayer, "행동 완료", "다음 라운드로 이동", "none");
+      els.roundOrderMessage.textContent = nextActor
+        ? `${core.playerLabel(nextActor)}가 이어서 행동합니다.`
+        : "이번 라운드의 행동이 끝났습니다.";
+      els.roundOrderDetail.textContent = result.protectedApplied ? `보호 규칙 적용! ${result.detail}` : "";
+      return;
+    }
+
+    els.roundOrderTitle.textContent = result.title || "순서 결정";
+    if (result.type === "both-correct") {
+      els.roundOrderBadges.innerHTML =
+        orderBadge(result.firstActor, `${core.playerLabel(result.firstActor)} 선공`, "먼저 행동", "first") +
+        orderBadge(result.secondActor, `${core.playerLabel(result.secondActor)} 후공`, "다음 행동", "second");
+    } else if (result.type === "one-correct") {
+      els.roundOrderBadges.innerHTML = orderBadge(
+        result.firstActor,
+        `${core.playerLabel(result.firstActor)}만 행동`,
+        "오답자는 자동으로 넘어감",
+        "solo"
+      );
+    } else {
+      els.roundOrderBadges.innerHTML = orderBadge(null, "행동 없음", "두 플레이어 모두 오답", "none");
+    }
+    els.roundOrderMessage.textContent = result.message || "";
+    els.roundOrderDetail.textContent = result.protectedApplied ? `보호 규칙 적용! ${result.detail}` : result.detail || "";
+  }
+
   function renderProblem() {
     if (!state.problem) {
       els.problemPanel.hidden = true;
@@ -646,10 +1257,18 @@
     els.formulaText.textContent = problem.formulaText;
     els.diagramBox.innerHTML = buildDiagram(problem);
     els.answerForm.hidden = state.phase !== "question";
-    els.answerInput.disabled = state.phase !== "question" || !canAct();
+    const submitter = activeSubmitter();
+    if (els.answerLabel) {
+      els.answerLabel.textContent = submitter
+        ? isOnline()
+          ? `내 답 (${core.playerLabel(submitter)})`
+          : `${core.playerLabel(submitter)} 정답`
+        : "제출 완료";
+    }
+    els.answerInput.disabled = state.phase !== "question" || !submitter || !canAct();
     const submitButton = els.answerForm.querySelector("button[type='submit']");
     if (submitButton) {
-      submitButton.disabled = state.phase !== "question" || !canAct();
+      submitButton.disabled = state.phase !== "question" || !submitter || !canAct();
     }
     if (lastRenderedProblemId !== problem.id) {
       els.answerInput.value = "";
@@ -658,6 +1277,8 @@
 
     if (state.phase === "painting") {
       els.timerText.textContent = `${remainingSeconds || core.PAINT_TIME_LIMIT}초`;
+    } else if (state.phase === "round-result") {
+      els.timerText.textContent = "결과";
     } else if (state.phase === "feedback") {
       els.timerText.textContent = "풀이";
     }
@@ -682,20 +1303,49 @@
   }
 
   function renderFeedbackPanel() {
-    const isFeedback = state && state.phase === "feedback";
-    els.feedbackPanel.hidden = !isFeedback;
-    if (!isFeedback) return;
-    els.feedbackTitle.textContent = state.lastFeedback ? state.lastFeedback.title : "안내";
-    els.feedbackMessage.textContent = state.lastFeedback ? state.lastFeedback.message : "";
+    const isVisible = state && (state.phase === "feedback" || state.phase === "round-result");
+    els.feedbackPanel.hidden = !isVisible;
+    if (!isVisible) return;
+    if (state.phase === "round-result" && state.roundResult) {
+      els.feedbackTitle.textContent = state.roundResult.title;
+      els.feedbackMessage.textContent =
+        `${state.roundResult.message} 정답은 ${state.problem.answer}입니다. ${state.problem.explanation}`;
+      els.continueBtn.textContent = (state.actionQueue || []).length ? "행동 시작" : "다음 라운드";
+    } else {
+      const nextActor = (state.actionQueue || [])[(state.currentActionIndex || 0) + 1];
+      els.feedbackTitle.textContent = state.lastFeedback ? state.lastFeedback.title : "안내";
+      els.feedbackMessage.textContent = state.lastFeedback ? state.lastFeedback.message : "";
+      els.continueBtn.textContent = nextActor ? "다음 행동" : "다음 라운드";
+    }
     els.continueBtn.disabled = !canAct();
   }
 
   function renderSkipNotice() {
-    const notice = state && state.phase === "question" && state.lastFeedback && state.lastFeedback.type === "skip";
-    els.skipNotice.hidden = !notice;
-    if (notice) {
-      els.skipNotice.textContent = state.lastFeedback.message;
+    if (!state || state.phase !== "question") {
+      els.skipNotice.hidden = true;
+      return;
     }
+    const submissions = state.submissions || {};
+    const submittedPlayers = core.PLAYER_KEYS.filter((player) => submissions[player]);
+    if (isOnline()) {
+      const opponent = online.role === "player1" ? "player2" : "player1";
+      if (submissions[online.role]) {
+        els.skipNotice.hidden = false;
+        els.skipNotice.textContent = "제출 완료! 상대가 제출할 때까지 기다려 주세요.";
+        return;
+      }
+      if (submissions[opponent]) {
+        els.skipNotice.hidden = false;
+        els.skipNotice.textContent = "상대가 답을 제출했습니다.";
+        return;
+      }
+    } else if (submittedPlayers.length === 1) {
+      const nextSubmitter = core.PLAYER_KEYS.find((player) => !submissions[player]);
+      els.skipNotice.hidden = false;
+      els.skipNotice.textContent = `${core.playerLabel(submittedPlayers[0])} 제출 완료! ${core.playerLabel(nextSubmitter)}도 답을 입력하세요.`;
+      return;
+    }
+    els.skipNotice.hidden = true;
   }
 
   function renderOnlineGameStatus() {
@@ -712,13 +1362,27 @@
     const opponentRole = online.role === "player1" ? "player2" : "player1";
     const opponent = players[opponentRole];
     const waiting = !players.player2;
-    const turnLabel = state ? core.playerLabel(state.currentPlayer) : "-";
-    const turnText = canAct() ? "내 차례" : waiting ? "상대 입장 대기" : "상대 차례";
+    let turnText = waiting ? "상대 입장 대기" : "";
+    if (!waiting && state) {
+      if (state.phase === "question") {
+        turnText = hasSubmitted(online.role)
+          ? "내 제출 완료, 상대 제출 대기"
+          : state.submissions && state.submissions[opponentRole]
+            ? "상대 제출 완료, 내 답 제출"
+            : "동시 문제 풀이";
+      } else if (state.phase === "round-result") {
+        turnText = canAct() ? "행동 시작 가능" : "상대가 진행";
+      } else if (state.phase === "painting") {
+        turnText = `${core.playerLabel(state.currentPlayer)} 색칠 중`;
+      } else if (state.phase === "feedback") {
+        turnText = canAct() ? "계속 진행 가능" : "상대 확인 중";
+      }
+    }
 
     els.onlineGameStatus.hidden = false;
     els.onlineGameStatus.textContent = waiting
       ? `온라인 방 ${online.roomCode} | 나는 ${myLabel}(${online.nickname}) | 상대 학생에게 방 코드를 알려주세요.`
-      : `온라인 방 ${online.roomCode} | 나는 ${myLabel}(${online.nickname}) | 상대 ${opponent ? opponent.nickname : "입장 완료"} | 현재 ${turnLabel} 차례, ${turnText}`;
+      : `온라인 방 ${online.roomCode} | 나는 ${myLabel}(${online.nickname}) | 상대 ${opponent ? opponent.nickname : "입장 완료"} | ${turnText}`;
 
     els.newGameBtn.disabled = online.role !== "player1";
     els.resultRestartBtn.disabled = online.role !== "player1";
@@ -750,7 +1414,7 @@
     }
     if (isOnline() && !canAct()) {
       stopTimer();
-      els.timerText.textContent = state.phase === "painting" ? "상대 색칠 중" : "상대 차례";
+      els.timerText.textContent = state.phase === "painting" ? "상대 색칠 중" : "상대 제출 대기";
       return;
     }
 
@@ -882,14 +1546,24 @@
     const text = (x, y, value, anchor) =>
       `<text x="${x}" y="${y}" text-anchor="${anchor || "middle"}" class="svg-label">${escapeSvg(value)}</text>`;
 
-    if (shape === "rectangle" || shape === "square") {
-      const wLabel = label(labels, shape === "square" ? "s" : "w", "가로");
-      const hLabel = label(labels, shape === "square" ? "s" : "h", "세로");
+    if (shape === "rectangle") {
+      const wLabel = label(labels, "w", "가로");
+      const hLabel = label(labels, "h", "세로");
       return svgWrap(`
         <rect x="55" y="28" width="150" height="82" rx="2" fill="${fill}" stroke="${perimeterStroke}" stroke-width="4" />
         ${text(130, 22, `${wLabel}cm`)}
         ${text(214, 73, `${hLabel}cm`, "start")}
         ${areaMode ? text(130, 74, "넓이", "middle") : ""}
+      `);
+    }
+
+    if (shape === "square") {
+      const sLabel = label(labels, "s", "한 변");
+      return svgWrap(`
+        <rect x="78" y="22" width="96" height="96" rx="2" fill="${fill}" stroke="${perimeterStroke}" stroke-width="4" />
+        ${text(126, 17, `${sLabel}cm`)}
+        ${text(183, 73, `${sLabel}cm`, "start")}
+        ${areaMode ? text(126, 74, "넓이", "middle") : ""}
       `);
     }
 

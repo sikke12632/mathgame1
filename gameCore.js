@@ -13,6 +13,12 @@
   const OBSTACLE_COUNTS = { easy: 10, normal: 20, hard: 30 };
   const TIME_LIMITS = { easy: 40, normal: 45, hard: 50 };
   const PAINT_TIME_LIMIT = 20;
+  const RPG_PROBLEM_COUNT = 5;
+  const RPG_BATTLE_TURN_COUNT = 5;
+  const RPG_BASE_HP = 100;
+  const RPG_BASE_ATTACK = 10;
+  const RPG_BASE_DEFENSE = 10;
+  const RPG_CHOICES = ["scissors", "rock", "paper"];
   const NUMBER_RANGES = {
     easy: [2, 9],
     normal: [3, 12],
@@ -186,22 +192,33 @@
   function chooseQuestionType(settings, history, rng) {
     if (settings.scope === "perimeter") return "perimeter";
     if (settings.scope === "area") return "area";
-    const recent = history.slice(-2).map((item) => item.questionType);
-    if (recent.length === 2 && recent[0] === recent[1]) {
-      return recent[0] === "area" ? "perimeter" : "area";
-    }
-    return rng() < 0.5 ? "perimeter" : "area";
+    const counts = { perimeter: 0, area: 0 };
+    history.forEach((item) => {
+      if (item && counts[item.questionType] !== undefined) {
+        counts[item.questionType] += 1;
+      }
+    });
+    const minCount = Math.min(counts.perimeter, counts.area);
+    const candidates = ["perimeter", "area"].filter((type) => counts[type] === minCount);
+    return candidates[randInt(rng, 0, candidates.length - 1)];
   }
 
   function chooseShape(settings, history, rng) {
     const shapes = settings.shapes.slice();
     if (shapes.length === 1) return shapes[0];
-    const recent = history.slice(-2).map((item) => item.shape);
-    if (recent.length === 2 && recent[0] === recent[1]) {
-      const alternatives = shapes.filter((shape) => shape !== recent[0]);
-      return alternatives[randInt(rng, 0, alternatives.length - 1)];
+    const counts = Object.fromEntries(shapes.map((shape) => [shape, 0]));
+    history.forEach((item) => {
+      if (item && counts[item.shape] !== undefined) {
+        counts[item.shape] += 1;
+      }
+    });
+    const minCount = Math.min(...shapes.map((shape) => counts[shape]));
+    let candidates = shapes.filter((shape) => counts[shape] === minCount);
+    const lastShape = history.length ? history[history.length - 1].shape : "";
+    if (candidates.length > 1) {
+      candidates = candidates.filter((shape) => shape !== lastShape);
     }
-    return shapes[randInt(rng, 0, shapes.length - 1)];
+    return candidates[randInt(rng, 0, candidates.length - 1)];
   }
 
   function generateProblem(settingsInput, historyInput, rngInput) {
@@ -212,13 +229,16 @@
     const questionType = chooseQuestionType(settings, history, rng);
     const [minAnswer, maxAnswer] = answerRangeForDifficulty(settings.difficulty);
     let fallback = null;
+    const recentAnswers = history.slice(-3).map((item) => item.answer);
 
     for (let attempt = 0; attempt < 100; attempt += 1) {
       const problem = makeProblem(shape, questionType, settings.difficulty, rng);
       fallback = fallback || problem;
       if (Number.isInteger(problem.answer) && problem.answer > 0) {
         if (problem.answer >= minAnswer && problem.answer <= maxAnswer) {
-          return problem;
+          if (!recentAnswers.includes(problem.answer) || attempt > 60) {
+            return problem;
+          }
         }
       }
     }
@@ -887,19 +907,172 @@
     return a + b > c && a + c > b && b + c > a;
   }
 
+  function createEmptySubmissions() {
+    return { player1: null, player2: null };
+  }
+
+  function normalizeSubmission(player, answerInput, problem, submittedAt, timedOut) {
+    const rawAnswer = timedOut ? "" : String(answerInput == null ? "" : answerInput).trim();
+    const answer = Number(rawAnswer);
+    const hasIntegerAnswer = Number.isInteger(answer);
+    return {
+      player,
+      answer: hasIntegerAnswer ? answer : null,
+      correct: !timedOut && hasIntegerAnswer && answer === problem.answer,
+      timedOut: Boolean(timedOut),
+      submittedAt: Number.isFinite(submittedAt) ? submittedAt : Date.now(),
+    };
+  }
+
+  function playerSubmitted(state, player) {
+    return Boolean(state && state.submissions && state.submissions[player]);
+  }
+
+  function allPlayersSubmitted(state) {
+    return PLAYER_KEYS.every((player) => playerSubmitted(state, player));
+  }
+
+  function chooseTieFirstActor(state) {
+    if (state.lastFirstActor) return opponentOf(state.lastFirstActor);
+    return "player1";
+  }
+
+  function fasterCorrectPlayer(state) {
+    const a = state.submissions.player1;
+    const b = state.submissions.player2;
+    const aTime = Number.isFinite(a && a.submittedAt) ? a.submittedAt : Infinity;
+    const bTime = Number.isFinite(b && b.submittedAt) ? b.submittedAt : Infinity;
+    if (aTime < bTime) return "player1";
+    if (bTime < aTime) return "player2";
+    return chooseTieFirstActor(state);
+  }
+
+  function updateFirstActorStreak(state, firstActor) {
+    if (!firstActor) {
+      return {
+        lastFirstActor: state.lastFirstActor || null,
+        consecutiveFirstActorCount: state.consecutiveFirstActorCount || 0,
+      };
+    }
+    if (state.lastFirstActor === firstActor) {
+      return {
+        lastFirstActor: firstActor,
+        consecutiveFirstActorCount: (state.consecutiveFirstActorCount || 0) + 1,
+      };
+    }
+    return {
+      lastFirstActor: firstActor,
+      consecutiveFirstActorCount: 1,
+    };
+  }
+
+  function submissionLabel(submission) {
+    if (!submission) return "미제출";
+    if (submission.timedOut) return "시간 초과";
+    return submission.correct ? "정답" : "오답";
+  }
+
+  function resolveRoundSubmissions(state) {
+    const correctPlayers = PLAYER_KEYS.filter((player) => state.submissions[player] && state.submissions[player].correct);
+    let actionQueue = [];
+    let firstActor = null;
+    let secondActor = null;
+    let protectedApplied = false;
+    let protectedPlayer = null;
+    let title = "";
+    let message = "";
+    let detail = "";
+    let resultType = "both-wrong";
+
+    if (correctPlayers.length === 2) {
+      const candidate = fasterCorrectPlayer(state);
+      firstActor = candidate;
+      secondActor = opponentOf(candidate);
+      if (state.lastFirstActor === candidate && (state.consecutiveFirstActorCount || 0) >= 2) {
+        protectedApplied = true;
+        protectedPlayer = candidate;
+        firstActor = opponentOf(candidate);
+        secondActor = candidate;
+      }
+      actionQueue = [firstActor, secondActor];
+      resultType = "both-correct";
+      title = `${playerLabel(firstActor)} 선공!`;
+      message = `이번 라운드 선공은 ${playerLabel(firstActor)}, 후공은 ${playerLabel(secondActor)}입니다.`;
+      detail = protectedApplied
+        ? `${playerLabel(protectedPlayer)}가 연속으로 먼저 행동했기 때문에 이번 라운드는 ${playerLabel(firstActor)}가 먼저 행동합니다.`
+        : `두 플레이어 모두 정답입니다. 더 빨리 제출한 ${playerLabel(candidate)}가 기본 선공 후보였습니다.`;
+    } else if (correctPlayers.length === 1) {
+      firstActor = correctPlayers[0];
+      actionQueue = [firstActor];
+      resultType = "one-correct";
+      title = `${playerLabel(firstActor)}만 행동합니다!`;
+      message = `${playerLabel(firstActor)} 정답! ${playerLabel(opponentOf(firstActor))}는 오답이라 이번 라운드에는 행동할 수 없습니다.`;
+      detail = "한 명만 정답인 라운드는 보호 규칙을 적용하지 않습니다.";
+    } else {
+      resultType = "both-wrong";
+      title = "이번 라운드는 행동 없음";
+      message = "두 플레이어 모두 오답입니다. 이번 라운드는 행동 없이 넘어갑니다.";
+      detail = "아무도 행동하지 않으므로 연속 먼저 행동 기록은 그대로 유지됩니다.";
+    }
+
+    const streak = updateFirstActorStreak(state, firstActor);
+    return cloneState(state, {
+      phase: "round-result",
+      currentPlayer: firstActor || state.currentPlayer || "player1",
+      actionQueue,
+      currentActionIndex: 0,
+      lastFirstActor: streak.lastFirstActor,
+      consecutiveFirstActorCount: streak.consecutiveFirstActorCount,
+      selection: [],
+      earnedCells: 0,
+      roundResult: {
+        type: resultType,
+        title,
+        message,
+        detail,
+        actionQueue: actionQueue.slice(),
+        firstActor,
+        secondActor,
+        protectedApplied,
+        protectedPlayer,
+        submissions: {
+          player1: Object.assign({}, state.submissions.player1),
+          player2: Object.assign({}, state.submissions.player2),
+        },
+        submissionLabels: {
+          player1: submissionLabel(state.submissions.player1),
+          player2: submissionLabel(state.submissions.player2),
+        },
+      },
+      lastFeedback: {
+        type: "round-result",
+        title,
+        message: detail ? `${message} ${detail}` : message,
+      },
+    });
+  }
+
   function createGameState(settingsInput, rngInput) {
     const settings = normalizeSettings(settingsInput);
     const rng = rngInput || Math.random;
     const board = createInitialBoard(settings.difficulty, rng);
     const problem = generateProblem(settings, [], rng);
     return {
+      gameMode: "territory",
       settings,
       board,
       currentPlayer: "player1",
       turnCounts: { player1: 0, player2: 0 },
+      roundIndex: 0,
       phase: "question",
       problem,
       problemHistory: [problem],
+      submissions: createEmptySubmissions(),
+      actionQueue: [],
+      currentActionIndex: 0,
+      lastFirstActor: null,
+      consecutiveFirstActorCount: 0,
+      roundResult: null,
       earnedCells: 0,
       selection: [],
       lastFeedback: null,
@@ -914,6 +1087,8 @@
       {
         board: state.board.slice(),
         turnCounts: Object.assign({}, state.turnCounts),
+        submissions: Object.assign(createEmptySubmissions(), state.submissions || {}),
+        actionQueue: (state.actionQueue || []).slice(),
         problemHistory: state.problemHistory.slice(),
         selection: state.selection.slice(),
         skippedTurns: (state.skippedTurns || []).slice(),
@@ -922,45 +1097,46 @@
     );
   }
 
-  function submitAnswer(state, answerInput) {
+  function submitAnswer(state, playerOrAnswer, answerInput, submittedAt) {
     if (state.phase !== "question" || !state.problem) return state;
-    const answer = Number(String(answerInput).trim());
-    if (Number.isInteger(answer) && answer === state.problem.answer) {
-      return cloneState(state, {
-        phase: "painting",
-        earnedCells: state.problem.answer,
-        selection: [],
-        lastFeedback: {
-          type: "correct",
-          title: "정답입니다",
-          message: `${state.problem.answer}칸을 획득했습니다. 연결된 빈칸을 칠하거나 상대 칸을 중립화할 수 있습니다.`,
-        },
-      });
-    }
-    return cloneState(state, {
-      phase: "feedback",
-      selection: [],
-      earnedCells: 0,
+    const player = PLAYER_KEYS.includes(playerOrAnswer) ? playerOrAnswer : state.currentPlayer || "player1";
+    const rawAnswer = PLAYER_KEYS.includes(playerOrAnswer) ? answerInput : playerOrAnswer;
+    if (playerSubmitted(state, player)) return state;
+
+    const submissions = Object.assign(createEmptySubmissions(), state.submissions || {});
+    submissions[player] = normalizeSubmission(player, rawAnswer, state.problem, submittedAt, false);
+    const next = cloneState(state, {
+      submissions,
       lastFeedback: {
-        type: "wrong",
-        title: "아쉬워요",
-        message: `정답은 ${state.problem.answer}입니다. ${state.problem.explanation}`,
+        type: "submitted",
+        title: "제출 완료!",
+        message: "상대가 제출할 때까지 기다려 주세요.",
       },
     });
+    if (allPlayersSubmitted(next)) {
+      return resolveRoundSubmissions(next);
+    }
+    return next;
   }
 
   function timeOutTurn(state) {
     if (state.phase !== "question" || !state.problem) return state;
-    return cloneState(state, {
-      phase: "feedback",
-      selection: [],
-      earnedCells: 0,
-      lastFeedback: {
-        type: "timeout",
-        title: "시간이 끝났습니다",
-        message: `정답은 ${state.problem.answer}입니다. ${state.problem.explanation}`,
-      },
+    const submissions = Object.assign(createEmptySubmissions(), state.submissions || {});
+    PLAYER_KEYS.forEach((player) => {
+      if (!submissions[player]) {
+        submissions[player] = normalizeSubmission(player, "", state.problem, Infinity, true);
+      }
     });
+    return resolveRoundSubmissions(
+      cloneState(state, {
+        submissions,
+        lastFeedback: {
+          type: "timeout",
+          title: "시간이 끝났습니다",
+          message: `정답은 ${state.problem.answer}입니다. ${state.problem.explanation}`,
+        },
+      })
+    );
   }
 
   function cellRefToIndex(cell) {
@@ -1104,6 +1280,7 @@
       if (next.board[cell] === "empty") next.board[cell] = player;
       if (next.board[cell] === opponent) next.board[cell] = "black";
     });
+    next.turnCounts[player] = Math.min(TURNS_PER_PLAYER, (next.turnCounts[player] || 0) + 1);
     next.phase = "feedback";
     next.selection = [];
     next.earnedCells = 0;
@@ -1162,60 +1339,86 @@
   }
 
   function isGameOver(state) {
-    const turnsDone = PLAYER_KEYS.every((player) => state.turnCounts[player] >= TURNS_PER_PLAYER);
+    const turnsDone = (state.roundIndex || 0) >= TURNS_PER_PLAYER;
     const noMoves = PLAYER_KEYS.every((player) => !hasAnyPaintableMove(state, player));
     return turnsDone || noMoves;
   }
 
-  function nextTurn(state, rngInput) {
-    const rng = rngInput || Math.random;
-    let next = cloneState(state, {
+  function createNextRound(state, rng) {
+    const nextRoundIndex = (state.roundIndex || 0) + 1;
+    const next = cloneState(state, {
+      roundIndex: nextRoundIndex,
       selection: [],
       earnedCells: 0,
+      submissions: createEmptySubmissions(),
+      actionQueue: [],
+      currentActionIndex: 0,
+      roundResult: null,
       skippedTurns: [],
     });
-    next.turnCounts[next.currentPlayer] = Math.min(
-      TURNS_PER_PLAYER,
-      next.turnCounts[next.currentPlayer] + 1
-    );
-    next.currentPlayer = opponentOf(next.currentPlayer);
-
-    while (!isGameOver(next)) {
-      if (next.turnCounts[next.currentPlayer] >= TURNS_PER_PLAYER) {
-        next.currentPlayer = opponentOf(next.currentPlayer);
-        continue;
-      }
-      if (!hasAnyPaintableMove(next, next.currentPlayer)) {
-        next.skippedTurns.push(next.currentPlayer);
-        next.turnCounts[next.currentPlayer] = Math.min(
-          TURNS_PER_PLAYER,
-          next.turnCounts[next.currentPlayer] + 1
-        );
-        next.currentPlayer = opponentOf(next.currentPlayer);
-        continue;
-      }
-      const problem = generateProblem(next.settings, next.problemHistory, rng);
-      next.problem = problem;
-      next.problemHistory.push(problem);
-      next.phase = "question";
-      next.lastFeedback = next.skippedTurns.length
-        ? {
-            type: "skip",
-            title: "자동으로 턴을 넘겼습니다",
-            message: `${next.skippedTurns.map(playerLabel).join(", ")} 플레이어는 칠할 수 있는 칸이 없어 턴을 넘겼습니다.`,
-          }
-        : null;
+    if (isGameOver(next)) {
+      next.phase = "gameover";
+      next.problem = null;
+      next.lastFeedback = {
+        type: "gameover",
+        title: "게임 종료",
+        message: "모든 라운드가 끝났거나 더 이상 칠할 수 있는 칸이 없습니다.",
+      };
       return next;
     }
-
-    next.phase = "gameover";
-    next.problem = null;
-    next.lastFeedback = {
-      type: "gameover",
-      title: "게임 종료",
-      message: "모든 턴이 끝났거나 더 이상 칠할 수 있는 칸이 없습니다.",
-    };
+    const problem = generateProblem(next.settings, next.problemHistory, rng);
+    next.problem = problem;
+    next.problemHistory.push(problem);
+    next.currentPlayer = next.lastFirstActor || "player1";
+    next.phase = "question";
+    next.lastFeedback = null;
     return next;
+  }
+
+  function nextTurn(state, rngInput) {
+    const rng = rngInput || Math.random;
+    if (state.phase === "round-result") {
+      const queue = state.actionQueue || [];
+      if (!queue.length) {
+        return createNextRound(state, rng);
+      }
+      return cloneState(state, {
+        phase: "painting",
+        currentPlayer: queue[0],
+        currentActionIndex: 0,
+        earnedCells: state.problem ? state.problem.answer : 0,
+        selection: [],
+        lastFeedback: {
+          type: "action-start",
+          title: `${playerLabel(queue[0])} 행동`,
+          message:
+            queue.length > 1
+              ? `현재 행동은 ${playerLabel(queue[0])}입니다. 다음 행동은 ${playerLabel(queue[1])}입니다.`
+              : `현재 행동은 ${playerLabel(queue[0])}입니다. 이번 라운드는 ${playerLabel(queue[0])}만 행동합니다.`,
+        },
+      });
+    }
+    if (state.phase === "feedback") {
+      const queue = state.actionQueue || [];
+      const nextActionIndex = (state.currentActionIndex || 0) + 1;
+      if (nextActionIndex < queue.length) {
+        const actor = queue[nextActionIndex];
+        return cloneState(state, {
+          phase: "painting",
+          currentPlayer: actor,
+          currentActionIndex: nextActionIndex,
+          earnedCells: state.problem ? state.problem.answer : 0,
+          selection: [],
+          lastFeedback: {
+            type: "action-start",
+            title: `${playerLabel(actor)} 행동`,
+            message: `현재 행동은 ${playerLabel(actor)}입니다.`,
+          },
+        });
+      }
+      return createNextRound(state, rng);
+    }
+    return state;
   }
 
   function countCells(board, cellState) {
@@ -1257,6 +1460,465 @@
     return cells.every((cell) => seen.has(cell));
   }
 
+  function hashSeedText(text) {
+    let hash = 2166136261;
+    String(text || "rpg")
+      .split("")
+      .forEach((char) => {
+        hash ^= char.charCodeAt(0);
+        hash = Math.imul(hash, 16777619);
+      });
+    return hash >>> 0;
+  }
+
+  function createRpgProblemSet(settingsInput, seedInput) {
+    const settings = normalizeSettings(settingsInput);
+    const rng = createRng(hashSeedText(seedInput || Date.now()));
+    const history = [];
+    const problems = [];
+    for (let index = 0; index < RPG_PROBLEM_COUNT; index += 1) {
+      const problem = generateProblem(settings, history, rng);
+      history.push(problem);
+      problems.push(problem);
+    }
+    return problems;
+  }
+
+  function createRpgState(settingsInput, seedInput) {
+    const settings = normalizeSettings(settingsInput);
+    const seed = String(seedInput || Date.now());
+    const problems = createRpgProblemSet(settings, seed);
+    return {
+      gameMode: "rpg",
+      settings,
+      seed,
+      phase: "rpgSolving",
+      problems,
+      answers: {
+        player1: [],
+        player2: [],
+      },
+      solveScores: {
+        player1: 0,
+        player2: 0,
+      },
+      solveFinished: {
+        player1: false,
+        player2: false,
+      },
+      statAllocations: {
+        player1: null,
+        player2: null,
+      },
+      statLocked: {
+        player1: false,
+        player2: false,
+      },
+      battle: null,
+      winner: null,
+      finishReason: null,
+      lastRpgError: "",
+    };
+  }
+
+  function rpgPlayerAnswerIndex(state, player) {
+    const answers = (state.answers && state.answers[player]) || [];
+    return Math.min(answers.length, RPG_PROBLEM_COUNT);
+  }
+
+  function submitRpgAnswer(state, player, answerInput, options) {
+    if (!state || state.phase !== "rpgSolving") return state;
+    if (!PLAYER_KEYS.includes(player)) return state;
+
+    const index = rpgPlayerAnswerIndex(state, player);
+    if (index >= RPG_PROBLEM_COUNT) return state;
+
+    const problem = state.problems[index];
+    const timedOut = Boolean(options && options.timedOut);
+    const submittedAnswer = timedOut ? null : Number(String(answerInput).trim());
+    const isCorrect = !timedOut && Number.isInteger(submittedAnswer) && submittedAnswer === problem.answer;
+    const earnedPoints = isCorrect ? problem.answer : 0;
+
+    const next = cloneRpgState(state, { lastRpgError: "" });
+    next.answers[player].push({
+      problemId: problem.id,
+      submittedAnswer,
+      correctAnswer: problem.answer,
+      isCorrect,
+      earnedPoints,
+      timedOut,
+    });
+    next.solveScores[player] = next.answers[player].reduce((sum, item) => sum + item.earnedPoints, 0);
+    next.solveFinished[player] = next.answers[player].length >= RPG_PROBLEM_COUNT;
+
+    if (next.solveFinished.player1 && next.solveFinished.player2) {
+      next.phase = "rpgStatAllocation";
+    }
+
+    return next;
+  }
+
+  function cloneRpgState(state, overrides) {
+    return Object.assign(
+      {},
+      state,
+      {
+        problems: (state.problems || []).slice(),
+        answers: {
+          player1: ((state.answers && state.answers.player1) || []).slice(),
+          player2: ((state.answers && state.answers.player2) || []).slice(),
+        },
+        solveScores: Object.assign({ player1: 0, player2: 0 }, state.solveScores || {}),
+        solveFinished: Object.assign({ player1: false, player2: false }, state.solveFinished || {}),
+        statAllocations: Object.assign({ player1: null, player2: null }, state.statAllocations || {}),
+        statLocked: Object.assign({ player1: false, player2: false }, state.statLocked || {}),
+        battle: state.battle ? cloneRpgBattle(state.battle) : null,
+      },
+      overrides || {}
+    );
+  }
+
+  function cloneRpgTurnMap(map) {
+    const cloned = {};
+    Object.keys(map || {}).forEach((turnKey) => {
+      cloned[turnKey] = Object.assign({}, map[turnKey]);
+    });
+    return cloned;
+  }
+
+  function cloneRpgBattle(battle) {
+    return Object.assign({}, battle, {
+      hp: Object.assign({ player1: 0, player2: 0 }, battle.hp || {}),
+      choices: cloneRpgTurnMap(battle.choices),
+      reveals: cloneRpgTurnMap(battle.reveals),
+      logs: (battle.logs || []).slice(),
+    });
+  }
+
+  function calculateRpgStats(input) {
+    const totalPoints = Math.max(0, Number(input.totalPoints) || 0);
+    const hpInvest = Math.max(0, Number(input.hpInvest) || 0);
+    const attackInvest = Math.max(0, Number(input.attackInvest) || 0);
+    const defenseInvest = Math.max(0, Number(input.defenseInvest) || 0);
+    const zeroPointArchetype = input.zeroPointArchetype === "defense" ? "defense" : "attack";
+    const attackBonus = totalPoints === 0 && zeroPointArchetype === "attack" ? 1 : 0;
+    const defenseBonus = totalPoints === 0 && zeroPointArchetype === "defense" ? 1 : 0;
+    const maxHp = RPG_BASE_HP + hpInvest * 2;
+    const attack = RPG_BASE_ATTACK + attackInvest + attackBonus;
+    const defense = RPG_BASE_DEFENSE + defenseInvest + defenseBonus;
+    return {
+      totalPoints,
+      hpInvest,
+      attackInvest,
+      defenseInvest,
+      maxHp,
+      currentHp: maxHp,
+      attack,
+      defense,
+      archetype: attack > defense ? "attack" : "defense",
+      zeroPointArchetype: totalPoints === 0 ? zeroPointArchetype : null,
+    };
+  }
+
+  function validateRpgStatInput(input) {
+    const totalPoints = Number(input.totalPoints);
+    const hpInvest = Number(input.hpInvest);
+    const attackInvest = Number(input.attackInvest);
+    const defenseInvest = Number(input.defenseInvest);
+    const values = [totalPoints, hpInvest, attackInvest, defenseInvest];
+
+    if (values.some((value) => !Number.isInteger(value))) {
+      return { ok: false, message: "스탯은 소수 없이 정수로 입력해야 합니다." };
+    }
+    if (values.some((value) => value < 0)) {
+      return { ok: false, message: "스탯은 0보다 작을 수 없습니다." };
+    }
+    if (hpInvest + attackInvest + defenseInvest !== totalPoints) {
+      return { ok: false, message: "사용 포인트와 획득 포인트가 같아야 합니다." };
+    }
+
+    const stats = calculateRpgStats(input);
+    if (stats.attack === stats.defense) {
+      return {
+        ok: false,
+        message: "공격력과 방어력은 같을 수 없습니다. 공격형 또는 방어형이 되도록 다시 배분하세요.",
+      };
+    }
+    return { ok: true, message: "", stats };
+  }
+
+  function lockRpgStats(state, player, input) {
+    if (!state || state.phase !== "rpgStatAllocation") return state;
+    if (!PLAYER_KEYS.includes(player)) return state;
+
+    const check = validateRpgStatInput(input);
+    if (!check.ok) {
+      return Object.assign(cloneRpgState(state), {
+        lastRpgError: check.message,
+      });
+    }
+
+    const next = cloneRpgState(state, { lastRpgError: "" });
+    next.statAllocations[player] = check.stats;
+    next.statLocked[player] = true;
+
+    if (next.statLocked.player1 && next.statLocked.player2) {
+      next.phase = "rpgBattle";
+      next.battle = {
+        turnIndex: 0,
+        hp: {
+          player1: next.statAllocations.player1.currentHp,
+          player2: next.statAllocations.player2.currentHp,
+        },
+        choices: {},
+        reveals: {},
+        logs: [],
+      };
+    }
+
+    return next;
+  }
+
+  function commitRpgChoice(state, player, commitHash) {
+    if (!state || state.phase !== "rpgBattle" || !state.battle) return state;
+    if (!PLAYER_KEYS.includes(player)) return state;
+
+    const turnKey = String(state.battle.turnIndex);
+    const next = cloneRpgState(state);
+    if (!next.battle.choices[turnKey]) next.battle.choices[turnKey] = {};
+    if (next.battle.choices[turnKey][player]) return next;
+    next.battle.choices[turnKey][player] = {
+      commitHash,
+      committedAt: Date.now(),
+    };
+    return next;
+  }
+
+  function revealRpgChoice(state, player, reveal) {
+    if (!state || state.phase !== "rpgBattle" || !state.battle) return state;
+    if (!PLAYER_KEYS.includes(player)) return state;
+
+    const turnKey = String(state.battle.turnIndex);
+    const next = cloneRpgState(state);
+    if (!next.battle.reveals[turnKey]) next.battle.reveals[turnKey] = {};
+    if (next.battle.reveals[turnKey][player]) return next;
+    next.battle.reveals[turnKey][player] = {
+      choice: reveal.choice,
+      salt: reveal.salt,
+      hashOk: reveal.hashOk !== false,
+      revealedAt: Date.now(),
+    };
+
+    const bothRevealed =
+      next.battle.reveals[turnKey].player1 &&
+      next.battle.reveals[turnKey].player2;
+
+    if (bothRevealed) {
+      return resolveRpgBattleTurn(next);
+    }
+    return next;
+  }
+
+  function resolveRpgBattleTurn(state) {
+    const turnKey = String(state.battle.turnIndex);
+    const reveals = state.battle.reveals[turnKey] || {};
+    if (!reveals.player1 || !reveals.player2) return state;
+
+    const p1Choice = normalizeRpgChoice(reveals.player1.choice);
+    const p2Choice = normalizeRpgChoice(reveals.player2.choice);
+    const p1 = rpgBattlePlayer(state, "player1");
+    const p2 = rpgBattlePlayer(state, "player2");
+    let result;
+
+    if (reveals.player1.hashOk === false || reveals.player2.hashOk === false) {
+      result = invalidRpgRevealResult(state, p1Choice, p2Choice, reveals);
+    } else {
+      result = resolveRpgTurn({
+        turnIndex: state.battle.turnIndex,
+        player1: p1,
+        player2: p2,
+        player1Choice: p1Choice,
+        player2Choice: p2Choice,
+      });
+    }
+
+    const next = cloneRpgState(state);
+    next.battle.hp.player1 = result.player1HpAfter;
+    next.battle.hp.player2 = result.player2HpAfter;
+    next.battle.logs.push(result);
+
+    const finish = determineRpgWinner(next);
+    if (finish.winner) {
+      next.phase = "rpgFinished";
+      next.winner = finish.winner;
+      next.finishReason = finish.reason;
+      return next;
+    }
+
+    next.battle.turnIndex += 1;
+    return next;
+  }
+
+  function normalizeRpgChoice(choice) {
+    return RPG_CHOICES.includes(choice) ? choice : "rock";
+  }
+
+  function rpgBattlePlayer(state, player) {
+    const stats = state.statAllocations[player];
+    return {
+      playerId: player,
+      maxHp: stats.maxHp,
+      currentHp: state.battle.hp[player],
+      attack: stats.attack,
+      defense: stats.defense,
+      archetype: stats.archetype,
+    };
+  }
+
+  function resolveRpgTurn(input) {
+    const p1 = Object.assign({}, input.player1);
+    const p2 = Object.assign({}, input.player2);
+    const rpsWinner = rpgWinner(input.player1Choice, input.player2Choice);
+    const effect =
+      rpsWinner === "draw"
+        ? rpgDrawEffect(p1, p2, input.player1Choice)
+        : rpgWinEffect(
+            rpsWinner === "player1" ? p1 : p2,
+            rpsWinner === "player1" ? p2 : p1,
+            rpsWinner === "player1" ? input.player1Choice : input.player2Choice
+          );
+
+    applyRpgEffect(effect, p1, p2);
+
+    return {
+      turnIndex: input.turnIndex,
+      player1Choice: input.player1Choice,
+      player2Choice: input.player2Choice,
+      rpsWinner,
+      player1HpBefore: input.player1.currentHp,
+      player2HpBefore: input.player2.currentHp,
+      player1HpAfter: p1.currentHp,
+      player2HpAfter: p2.currentHp,
+      effect,
+      message: rpgTurnMessage(input.player1Choice, input.player2Choice, effect),
+    };
+  }
+
+  function rpgWinner(a, b) {
+    if (a === b) return "draw";
+    if (
+      (a === "scissors" && b === "paper") ||
+      (a === "rock" && b === "scissors") ||
+      (a === "paper" && b === "rock")
+    ) {
+      return "player1";
+    }
+    return "player2";
+  }
+
+  function rpgWinEffect(actor, target, choice) {
+    if (choice === "scissors") {
+      return { type: "damage", actor: actor.playerId, target: target.playerId, amount: actor.attack };
+    }
+    if (choice === "paper") {
+      return { type: "heal", actor: actor.playerId, target: actor.playerId, amount: actor.defense };
+    }
+    if (actor.archetype === "attack") {
+      return { type: "damage", actor: actor.playerId, target: target.playerId, amount: actor.attack };
+    }
+    return { type: "heal", actor: actor.playerId, target: actor.playerId, amount: actor.defense };
+  }
+
+  function rpgDrawEffect(player1, player2, choice) {
+    if (choice === "scissors") return rpgCompareDamage(player1, player2, player1.attack, player2.attack);
+    if (choice === "paper") return rpgCompareHeal(player1, player2, player1.defense, player2.defense);
+
+    const p1Value = player1.archetype === "attack" ? player1.attack : player1.defense;
+    const p2Value = player2.archetype === "attack" ? player2.attack : player2.defense;
+    if (p1Value === p2Value) return { type: "none", actor: null, target: null, amount: 0 };
+    const actor = p1Value > p2Value ? player1 : player2;
+    const target = p1Value > p2Value ? player2 : player1;
+    const amount = Math.abs(p1Value - p2Value);
+    if (actor.archetype === "attack") {
+      return { type: "damage", actor: actor.playerId, target: target.playerId, amount };
+    }
+    return { type: "heal", actor: actor.playerId, target: actor.playerId, amount };
+  }
+
+  function rpgCompareDamage(player1, player2, value1, value2) {
+    if (value1 === value2) return { type: "none", actor: null, target: null, amount: 0 };
+    const actor = value1 > value2 ? player1 : player2;
+    const target = value1 > value2 ? player2 : player1;
+    return { type: "damage", actor: actor.playerId, target: target.playerId, amount: Math.abs(value1 - value2) };
+  }
+
+  function rpgCompareHeal(player1, player2, value1, value2) {
+    if (value1 === value2) return { type: "none", actor: null, target: null, amount: 0 };
+    const actor = value1 > value2 ? player1 : player2;
+    return { type: "heal", actor: actor.playerId, target: actor.playerId, amount: Math.abs(value1 - value2) };
+  }
+
+  function applyRpgEffect(effect, player1, player2) {
+    if (!effect || effect.type === "none" || !effect.target) return;
+    const target = effect.target === "player1" ? player1 : player2;
+    if (effect.type === "damage") {
+      target.currentHp = Math.max(0, target.currentHp - effect.amount);
+    } else {
+      target.currentHp = Math.min(target.maxHp, target.currentHp + effect.amount);
+    }
+  }
+
+  function rpgTurnMessage(p1Choice, p2Choice, effect) {
+    const labels = { scissors: "가위", rock: "바위", paper: "보" };
+    const open = `A는 ${labels[p1Choice]}, B는 ${labels[p2Choice]}를 냈습니다.`;
+    if (!effect || effect.type === "none") return `${open} 아무 효과도 일어나지 않았습니다.`;
+    const actor = playerLabel(effect.actor);
+    if (effect.type === "damage") {
+      return `${open} ${actor}가 ${playerLabel(effect.target)}에게 ${effect.amount} 피해를 주었습니다.`;
+    }
+    return `${open} ${actor}가 ${effect.amount}만큼 회복했습니다.`;
+  }
+
+  function invalidRpgRevealResult(state, p1Choice, p2Choice, reveals) {
+    const p1Penalty = reveals.player1.hashOk === false ? 20 : 0;
+    const p2Penalty = reveals.player2.hashOk === false ? 20 : 0;
+    return {
+      turnIndex: state.battle.turnIndex,
+      player1Choice: p1Choice,
+      player2Choice: p2Choice,
+      rpsWinner: p1Penalty && !p2Penalty ? "player2" : p2Penalty && !p1Penalty ? "player1" : "draw",
+      player1HpBefore: state.battle.hp.player1,
+      player2HpBefore: state.battle.hp.player2,
+      player1HpAfter: Math.max(0, state.battle.hp.player1 - p1Penalty),
+      player2HpAfter: Math.max(0, state.battle.hp.player2 - p2Penalty),
+      effect: {
+        type: p1Penalty || p2Penalty ? "damage" : "none",
+        actor: null,
+        target: p1Penalty ? "player1" : p2Penalty ? "player2" : null,
+        amount: p1Penalty || p2Penalty,
+      },
+      message: "선택 검증에 실패했습니다. 해당 턴은 패배 처리됩니다.",
+    };
+  }
+
+  function determineRpgWinner(state) {
+    const hp1 = state.battle.hp.player1;
+    const hp2 = state.battle.hp.player2;
+    if (hp1 <= 0 && hp2 <= 0) return { winner: "draw", reason: "두 플레이어의 체력이 동시에 0이 되었습니다." };
+    if (hp1 <= 0) return { winner: "player2", reason: "A의 체력이 0이 되었습니다." };
+    if (hp2 <= 0) return { winner: "player1", reason: "B의 체력이 0이 되었습니다." };
+    if (state.battle.turnIndex + 1 < RPG_BATTLE_TURN_COUNT) return { winner: null, reason: null };
+    if (hp1 > hp2) return { winner: "player1", reason: "5턴 종료 후 A의 남은 체력이 더 높습니다." };
+    if (hp2 > hp1) return { winner: "player2", reason: "5턴 종료 후 B의 남은 체력이 더 높습니다." };
+    if (state.solveScores.player1 > state.solveScores.player2) {
+      return { winner: "player1", reason: "체력이 같아 문제 풀이 점수로 A가 승리했습니다." };
+    }
+    if (state.solveScores.player2 > state.solveScores.player1) {
+      return { winner: "player2", reason: "체력이 같아 문제 풀이 점수로 B가 승리했습니다." };
+    }
+    return { winner: "draw", reason: "체력과 문제 풀이 점수가 모두 같아 무승부입니다." };
+  }
+
   return {
     BOARD_SIZE,
     TURNS_PER_PLAYER,
@@ -1264,6 +1926,12 @@
     OBSTACLE_COUNTS,
     TIME_LIMITS,
     PAINT_TIME_LIMIT,
+    RPG_PROBLEM_COUNT,
+    RPG_BATTLE_TURN_COUNT,
+    RPG_BASE_HP,
+    RPG_BASE_ATTACK,
+    RPG_BASE_DEFENSE,
+    RPG_CHOICES,
     SHAPES,
     QUESTION_TYPES,
     createRng,
@@ -1279,6 +1947,18 @@
     createInitialBoard,
     generateProblem,
     createGameState,
+    createEmptySubmissions,
+    createRpgProblemSet,
+    createRpgState,
+    rpgPlayerAnswerIndex,
+    submitRpgAnswer,
+    calculateRpgStats,
+    validateRpgStatInput,
+    lockRpgStats,
+    commitRpgChoice,
+    revealRpgChoice,
+    resolveRpgTurn,
+    determineRpgWinner,
     submitAnswer,
     timeOutTurn,
     selectCells,

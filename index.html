@@ -12,9 +12,43 @@
         <div class="setup-copy">
           <p class="kicker">5학년 1학기: 둘레와 넓이</p>
           <h1>도형 영토전</h1>
+          <button id="howToPlayBtn" class="ghost-button how-to-button" type="button" aria-expanded="false">
+            플레이 방법
+          </button>
+          <section id="howToPlayPanel" class="how-to-panel" hidden>
+            <h2>이렇게 해요</h2>
+            <ol>
+              <li>A와 B가 같은 문제를 풉니다.</li>
+              <li>둘 다 정답이면 빨리 낸 사람이 먼저 칠합니다.</li>
+              <li>한 명만 정답이면 정답자만 칠합니다.</li>
+              <li>내 색과 붙은 칸만 칠할 수 있습니다.</li>
+              <li>마지막에 내 색 칸이 많으면 이깁니다.</li>
+            </ol>
+            <p>A는 파랑, B는 빨강, X는 못 쓰는 칸입니다.</p>
+          </section>
         </div>
 
         <form id="setupForm" class="setup-form">
+          <fieldset class="setting-group">
+            <legend>대전 형식</legend>
+            <div class="mode-select-grid" id="gameModeChoices">
+              <label class="mode-card-option">
+                <input type="radio" name="gameMode" value="territory" checked />
+                <span>
+                  <strong>도형 영토전</strong>
+                  <small>문제를 풀고 얻은 칸으로 영토를 넓힙니다.</small>
+                </span>
+              </label>
+              <label class="mode-card-option">
+                <input type="radio" name="gameMode" value="rpg" />
+                <span>
+                  <strong>수학 RPG 대전</strong>
+                  <small>5문제를 풀어 스탯을 올린 뒤 가위바위보 전투를 합니다.</small>
+                </span>
+              </label>
+            </div>
+          </fieldset>
+
           <fieldset class="setting-group">
             <legend>학습 범위</legend>
             <div class="segmented">
@@ -105,6 +139,14 @@
 
             <section id="skipNotice" class="notice-panel" hidden></section>
 
+            <section id="roundOrderPanel" class="round-order-panel" hidden>
+              <p id="roundOrderEyebrow" class="round-order-eyebrow">이번 라운드</p>
+              <h2 id="roundOrderTitle">선공 결정</h2>
+              <div id="roundOrderBadges" class="round-order-badges"></div>
+              <p id="roundOrderMessage" class="round-order-message"></p>
+              <p id="roundOrderDetail" class="round-order-detail"></p>
+            </section>
+
             <section id="problemPanel" class="problem-panel">
               <div class="problem-topline">
                 <span id="problemType" class="problem-type">이번 문제: 넓이 구하기</span>
@@ -115,7 +157,7 @@
               <p id="problemPrompt" class="problem-prompt"></p>
               <p id="formulaText" class="formula-text"></p>
               <form id="answerForm" class="answer-form">
-                <label for="answerInput">정답</label>
+                <label id="answerLabel" for="answerInput">정답</label>
                 <div class="answer-row">
                   <input id="answerInput" inputmode="numeric" autocomplete="off" />
                   <button type="submit" class="primary-action compact">제출</button>
@@ -147,6 +189,93 @@
             </section>
           </aside>
         </div>
+      </section>
+
+      <section id="rpgScreen" class="rpg-screen" hidden>
+        <header class="game-header">
+          <div>
+            <p class="kicker">5학년 1학기: 둘레와 넓이</p>
+            <h1>수학 RPG 대전</h1>
+            <p id="rpgOnlineStatus" class="online-game-status"></p>
+          </div>
+          <div class="header-actions">
+            <button id="rpgBackSetupBtn" class="ghost-button" type="button">설정</button>
+          </div>
+        </header>
+
+        <section id="rpgSolvingPanel" class="rpg-panel">
+          <div class="problem-topline">
+            <span id="rpgProblemCount" class="problem-type">문제 1/5</span>
+            <span id="rpgScoreText" class="timer-text">0점</span>
+          </div>
+          <h2 id="rpgShapeName">도형</h2>
+          <div id="rpgDiagramBox" class="diagram-box" aria-hidden="true"></div>
+          <p id="rpgProblemPrompt" class="problem-prompt"></p>
+          <p id="rpgFormulaText" class="formula-text"></p>
+          <form id="rpgAnswerForm" class="answer-form">
+            <label for="rpgAnswerInput">정답</label>
+            <div class="answer-row">
+              <input id="rpgAnswerInput" inputmode="numeric" autocomplete="off" />
+              <button type="submit" class="primary-action compact">제출</button>
+            </div>
+          </form>
+          <p id="rpgOpponentSolveStatus" class="online-status"></p>
+        </section>
+
+        <section id="rpgStatPanel" class="rpg-panel" hidden>
+          <h2>스탯 투자</h2>
+          <p id="rpgStatPointText" class="online-status"></p>
+          <div id="rpgAnswerReview" class="rpg-answer-review"></div>
+          <div class="rpg-stat-grid">
+            <label>체력 투자 <input id="rpgHpInvest" type="number" min="0" step="1" value="0" /></label>
+            <label>공격력 투자 <input id="rpgAttackInvest" type="number" min="0" step="1" value="0" /></label>
+            <label>방어력 투자 <input id="rpgDefenseInvest" type="number" min="0" step="1" value="0" /></label>
+          </div>
+          <div id="rpgZeroBonusBox" class="segmented" hidden>
+            <label><input type="radio" name="rpgZeroBonus" value="attack" checked /> <span>공격형 보정</span></label>
+            <label><input type="radio" name="rpgZeroBonus" value="defense" /> <span>방어형 보정</span></label>
+          </div>
+          <dl class="paint-stats">
+            <div><dt>최종 체력</dt><dd id="rpgPreviewHp">100</dd></div>
+            <div><dt>최종 공격력</dt><dd id="rpgPreviewAttack">10</dd></div>
+            <div><dt>최종 방어력</dt><dd id="rpgPreviewDefense">10</dd></div>
+            <div><dt>성향</dt><dd id="rpgPreviewArchetype">공격형</dd></div>
+          </dl>
+          <p id="rpgStatError" class="form-error"></p>
+          <button id="rpgLockStatsBtn" class="primary-action compact" type="button">스탯 확정</button>
+          <p id="rpgOpponentStatStatus" class="online-status"></p>
+        </section>
+
+        <section id="rpgBattlePanel" class="rpg-panel" hidden>
+          <div class="rpg-fighters">
+            <div class="rpg-fighter-card player1-line">
+              <h2>A</h2>
+              <div class="rpg-health"><span id="rpgP1HpBar"></span></div>
+              <p id="rpgP1Stats"></p>
+            </div>
+            <div class="rpg-fighter-card player2-line">
+              <h2>B</h2>
+              <div class="rpg-health"><span id="rpgP2HpBar"></span></div>
+              <p id="rpgP2Stats"></p>
+            </div>
+          </div>
+          <p id="rpgTurnText" class="phase-text">1/5턴</p>
+          <div class="rpg-choice-buttons">
+            <button class="primary-action compact" type="button" data-rpg-choice="scissors">가위</button>
+            <button class="primary-action compact" type="button" data-rpg-choice="rock">바위</button>
+            <button class="primary-action compact" type="button" data-rpg-choice="paper">보</button>
+          </div>
+          <p id="rpgChoiceStatus" class="online-status"></p>
+          <div id="rpgBattleLog" class="rpg-battle-log"></div>
+        </section>
+
+        <section id="rpgResultPanel" class="rpg-panel" hidden>
+          <p class="kicker">RPG 대전 종료</p>
+          <h1 id="rpgWinnerTitle">결과</h1>
+          <p id="rpgFinishReason"></p>
+          <div id="rpgFinalSummary" class="result-grid"></div>
+          <button id="rpgResultSetupBtn" class="primary-action" type="button">설정으로 돌아가기</button>
+        </section>
       </section>
 
       <section id="resultScreen" class="result-screen" hidden>
